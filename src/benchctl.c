@@ -436,6 +436,7 @@ static int cmd_list_tiers(const char *profiles_path, const char *out_path) {
 			fprintf(fp, "{\"name\":"); json_write_escaped(fp, name);
 			fprintf(fp, ",\"value\":"); json_write_escaped(fp, id);
 			fprintf(fp, "}");
+			printf("%s\t%s\n", name, id);
 		}
 	}
 	fprintf(fp, "]}\n");
@@ -463,6 +464,7 @@ static int cmd_list_profiles(const char *profiles_path, const char *out_path) {
 			fprintf(fp, "{\"name\":"); json_write_escaped(fp, label);
 			fprintf(fp, ",\"value\":"); json_write_escaped(fp, id);
 			fprintf(fp, "}");
+			printf("%s\t%s\n", label, id);
 		}
 	}
 	fprintf(fp, "]}\n");
@@ -499,6 +501,7 @@ static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, c
 			fprintf(fp, "{\"name\":"); json_write_escaped(fp, display);
 			fprintf(fp, ",\"value\":"); json_write_escaped(fp, id);
 			fprintf(fp, "}");
+			printf("%s\t%s\n", display, id);
 		}
 	}
 	fprintf(fp, "]}\n");
