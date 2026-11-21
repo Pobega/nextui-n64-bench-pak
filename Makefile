@@ -1,6 +1,9 @@
 PAK_NAME ?= $(shell jq -r .name pak.json 2>/dev/null || echo N64Bench)
 PLATFORMS ?= tg5040 tg5050 h700
 
+MINUI_LIST_VERSION ?= 0.16.0
+MINUI_PRESENTER_VERSION ?= 0.14.0
+
 NEXTUI_REPO ?= /var/home/pobega/Code/NextUI
 NEXTUI_COMMIT ?= 32626b02d9f95d7cc377cabc858d94ff713ff416
 
@@ -27,8 +30,8 @@ BIN_DIR := $(BUILD_DIR)/bin
 CORES_DIR := $(BUILD_DIR)/cores
 DIST_DIR := $(CURDIR)/dist
 
-.PHONY: all src-nextui build-minarch build-benchctl build-cores build package release push clean distclean \
-	$(foreach p,$(PLATFORMS),minarch-$(p) benchctl-$(p) cores-$(p))
+.PHONY: all src-nextui build-minarch build-benchctl build-ui build-cores build package release push clean distclean \
+	$(foreach p,$(PLATFORMS),minarch-$(p) benchctl-$(p) ui-$(p) cores-$(p))
 
 all: release
 
@@ -61,7 +64,19 @@ $(NEXTUI_SRC)/.patched: $(wildcard $(CURDIR)/patches/*.patch)
 	done
 	@touch $(NEXTUI_SRC)/.patched
 
+$(BIN_DIR)/%/minui-list:
+	@mkdir -p $(dir $@)
+	curl -f -sSL -o $@ https://github.com/josegonzalez/minui-list/releases/download/$(MINUI_LIST_VERSION)/minui-list-$*-nextui
+	@chmod 0755 $@
+
+$(BIN_DIR)/%/minui-presenter:
+	@mkdir -p $(dir $@)
+	curl -f -sSL -o $@ https://github.com/josegonzalez/minui-presenter/releases/download/$(MINUI_PRESENTER_VERSION)/minui-presenter-$*-nextui
+	@chmod 0755 $@
+
 define BUILD_PLATFORM_RULES
+ui-$(1): $(BIN_DIR)/$(1)/minui-list $(BIN_DIR)/$(1)/minui-presenter
+
 minarch-$(1): src-nextui
 	@echo "Building minarch-bench.elf for $(1)..."
 	@mkdir -p $(BIN_DIR)/$(1)
@@ -143,8 +158,9 @@ $(foreach p,$(PLATFORMS),$(eval $(call BUILD_PLATFORM_RULES,$(p))))
 
 build-minarch: $(foreach p,$(PLATFORMS),minarch-$(p))
 build-benchctl: $(foreach p,$(PLATFORMS),benchctl-$(p))
+build-ui: $(foreach p,$(PLATFORMS),ui-$(p))
 build-cores: $(foreach p,$(PLATFORMS),cores-$(p))
-build: build-minarch build-benchctl build-cores
+build: build-minarch build-benchctl build-ui build-cores
 
 package:
 	@echo "Packaging $(PAK_NAME).pak.zip and platform tool distributions..."
@@ -158,7 +174,7 @@ package:
 	@cp states/.gitkeep $(BUILD_DIR)/staging/states/
 	@for p in $(PLATFORMS); do \
 		mkdir -p $(BUILD_DIR)/staging/bin/$$p $(BUILD_DIR)/staging/cores/$$p; \
-		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BUILD_DIR)/staging/bin/$$p/; \
+		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(BUILD_DIR)/staging/bin/$$p/; \
 		cp $(CORES_DIR)/$$p/*.so $(BUILD_DIR)/staging/cores/$$p/; \
 		chmod 0755 $(BUILD_DIR)/staging/bin/$$p/* $(BUILD_DIR)/staging/cores/$$p/*; \
 		mkdir -p $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/cores/$$p \
@@ -166,7 +182,7 @@ package:
 		cp pak.json launch.sh LICENSE README.md $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/; \
 		chmod 0755 $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/launch.sh; \
 		cp config/*.json $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/config/; \
-		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p/; \
+		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p/; \
 		cp $(CORES_DIR)/$$p/*.so $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/cores/$$p/; \
 	done
 	@cd $(BUILD_DIR)/staging && zip -r $(DIST_DIR)/$(PAK_NAME).pak.zip .
