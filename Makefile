@@ -79,23 +79,63 @@ benchctl-$(1): src/benchctl.c
 		-v $$(CURDIR):/workspace:rw \
 		ghcr.io/loveretro/$(1)-toolchain:latest \
 		bash -euc '\
-			$${CROSS_COMPILE}gcc -std=c99 -O2 -Wall -Wextra -Werror \
+			/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-gcc -std=c99 -O2 -Wall -Wextra -Werror \
 				/workspace/src/benchctl.c -o /workspace/build/bin/$(1)/benchctl && \
-			$${CROSS_COMPILE}strip --strip-unneeded /workspace/build/bin/$(1)/benchctl && \
+			/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-strip --strip-unneeded /workspace/build/bin/$(1)/benchctl && \
 			chmod 0755 /workspace/build/bin/$(1)/benchctl \
 		'
 
 cores-$(1):
 	@echo "Gathering/building N64 cores for $(1)..."
 	@mkdir -p $(CORES_DIR)/$(1)
-	@if [ ! -f "$(REARMED_PAK_DIR)/build/cores/$(1)/mupen64plus_rearmed_libretro.so" ]; then \
-		$(MAKE) -C $(REARMED_PAK_DIR) PLATFORMS="$(1)" build-$(1); \
+	@if [ "$(1)" = "tg5050" ]; then \
+		$(MAKE) -C $(REARMED_PAK_DIR) src; \
+		$(MAKE) -C $(PARALLEL_PAK_DIR) src; \
+		$$(CONTAINER_RUNTIME) run --rm $$(CONTAINER_MOUNT_OPTS) \
+			-v $(REARMED_PAK_DIR):/src-rearmed:rw \
+			-v $(PARALLEL_PAK_DIR):/src-parallel:rw \
+			-v $$(CURDIR):/workspace:rw \
+			ghcr.io/loveretro/tg5050-toolchain:latest \
+			bash -euc '\
+				mkdir -p /tmp/khr-inc/KHR /tmp/khr-inc/EGL && \
+				ln -sf /opt/aarch64-nextui-linux-gnu/aarch64-nextui-linux-gnu/libc/usr/include/SDL2/SDL_opengles2_khrplatform.h /tmp/khr-inc/KHR/khrplatform.h && \
+				touch /tmp/khr-inc/EGL/egl.h && \
+				export CFLAGS="-mcpu=cortex-a55 -mtune=cortex-a55 -I/tmp/khr-inc" && \
+				export CXXFLAGS="-mcpu=cortex-a55 -mtune=cortex-a55 -I/tmp/khr-inc" && \
+				export LDFLAGS="-mcpu=cortex-a55 -mtune=cortex-a55" && \
+				cd /src-rearmed/build/mupen64plus-rearmed && \
+				rm -f mupen64plus_rearmed_libretro.so && find . \( -name "*.o" -o -name "*.d" \) -delete && \
+				make -j$$$$(nproc) platform=unix ARCH=aarch64 WITH_DYNAREC=aarch64 GLES=1 \
+					GL_LIB="-lGLESv2 -lmali" \
+					HAVE_PARALLEL=0 HAVE_PARALLEL_RSP=0 HAVE_GLIDEN64=0 HAVE_THR_AL=0 HAVE_GLIDE64=1 HAVE_RICE=1 HAVE_GLN64=1 \
+					CC=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-gcc \
+					CXX=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-g++ \
+					AR=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-ar \
+					CC_AS=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-gcc && \
+				cp mupen64plus_rearmed_libretro.so /workspace/build/cores/tg5050/mupen64plus_rearmed_libretro.so && \
+				/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-strip --strip-unneeded /workspace/build/cores/tg5050/mupen64plus_rearmed_libretro.so && \
+				cd /src-parallel/build/parallel-n64 && \
+				rm -f parallel_n64_libretro.so && find . \( -name "*.o" -o -name "*.d" \) -delete && \
+				make -j$$$$(nproc) platform=unix ARCH=aarch64 WITH_DYNAREC=aarch64 GLES=1 \
+					GL_LIB="-lGLESv2 -lmali" \
+					HAVE_PARALLEL=0 HAVE_PARALLEL_RSP=0 HAVE_GLIDEN64=0 HAVE_GLN64=0 HAVE_THR_AL=0 HAVE_GLIDE64=1 HAVE_RICE=1 \
+					CC=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-gcc \
+					CXX=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-g++ \
+					AR=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-ar \
+					CC_AS=/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-gcc && \
+				cp parallel_n64_libretro.so /workspace/build/cores/tg5050/parallel_n64_libretro.so && \
+				/opt/aarch64-nextui-linux-gnu/bin/aarch64-nextui-linux-gnu-strip --strip-unneeded /workspace/build/cores/tg5050/parallel_n64_libretro.so \
+			'; \
+	else \
+		if [ ! -f "$(REARMED_PAK_DIR)/build/cores/$(1)/mupen64plus_rearmed_libretro.so" ]; then \
+			$(MAKE) -C $(REARMED_PAK_DIR) PLATFORMS="$(1)" build-$(1); \
+		fi; \
+		cp "$(REARMED_PAK_DIR)/build/cores/$(1)/mupen64plus_rearmed_libretro.so" "$(CORES_DIR)/$(1)/"; \
+		if [ ! -f "$(PARALLEL_PAK_DIR)/build/cores/$(1)/parallel_n64_libretro.so" ]; then \
+			$(MAKE) -C $(PARALLEL_PAK_DIR) PLATFORMS="$(1)" build-$(1); \
+		fi; \
+		cp "$(PARALLEL_PAK_DIR)/build/cores/$(1)/parallel_n64_libretro.so" "$(CORES_DIR)/$(1)/"; \
 	fi
-	@cp "$(REARMED_PAK_DIR)/build/cores/$(1)/mupen64plus_rearmed_libretro.so" "$(CORES_DIR)/$(1)/"
-	@if [ ! -f "$(PARALLEL_PAK_DIR)/build/cores/$(1)/parallel_n64_libretro.so" ]; then \
-		$(MAKE) -C $(PARALLEL_PAK_DIR) PLATFORMS="$(1)" build-$(1); \
-	fi
-	@cp "$(PARALLEL_PAK_DIR)/build/cores/$(1)/parallel_n64_libretro.so" "$(CORES_DIR)/$(1)/"
 	@chmod 0755 $(CORES_DIR)/$(1)/*.so
 endef
 
