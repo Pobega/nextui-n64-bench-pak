@@ -1,0 +1,1061 @@
+diff --git a/workspace/all/common/api.h b/workspace/all/common/api.h
+index 1d7f967f..6cbfcd17 100644
+--- a/workspace/all/common/api.h
++++ b/workspace/all/common/api.h
+@@ -735,6 +735,7 @@ void PLAT_HWR_prepareCoreFrame(void);
+ void PLAT_HWR_restoreFrontendState(void);
+ void PLAT_HWR_setFrame(int width, int height, int bottom_left_origin);
+ void PLAT_HWR_clearFrame(void);
++void PLAT_HWR_finish(void);
+ int PLAT_HWR_isReady(void);
+ void* PLAT_HWR_getProcAddress(const char* sym);
+ int PLAT_HWR_maxTextureSize(void);
+diff --git a/workspace/all/common/generic_video.c b/workspace/all/common/generic_video.c
+index baa42a8d..14098274 100644
+--- a/workspace/all/common/generic_video.c
++++ b/workspace/all/common/generic_video.c
+@@ -475,6 +475,10 @@ void PLAT_HWR_clearFrame(void) {
+ 	hwr.frame_dirty = 0;
+ }
+ 
++void PLAT_HWR_finish(void) {
++	glFinish();
++}
++
+ 
+ #define MAX_SHADERLINE_LENGTH 512
+ int extractPragmaParameters(const char *shaderSource, ShaderParam *params, int maxParams) {
+diff --git a/workspace/all/minarch/ma_audio.c b/workspace/all/minarch/ma_audio.c
+index a8f66e76..c69485b5 100644
+--- a/workspace/all/minarch/ma_audio.c
++++ b/workspace/all/minarch/ma_audio.c
+@@ -3,6 +3,7 @@
+ #include <msettings.h>
+ #include "ma_internal.h"
+ #include "ma_audio.h"
++#include "ma_bench.h"
+ 
+ static bool resetAudio = false;
+ 
+@@ -44,6 +45,7 @@ void audio_sample_callback(int16_t left, int16_t right) {
+ }
+ 
+ size_t audio_sample_batch_callback(const int16_t *data, size_t frames) {
++	Bench_onAudioBatch();
+ 	if (rewinding && !rewind_ctx.audio) return frames;
+ 	if (!fast_forward || ff_audio) {
+ 		if (use_core_fps || fast_forward) {
+diff --git a/workspace/all/minarch/ma_bench.c b/workspace/all/minarch/ma_bench.c
+new file mode 100644
+index 00000000..8f818b5c
+--- /dev/null
++++ b/workspace/all/minarch/ma_bench.c
+@@ -0,0 +1,601 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <math.h>
++#include <SDL2/SDL.h>
++#include <SDL2/SDL_ttf.h>
++
++#include "ma_internal.h"
++#include "ma_saves.h"
++#include "ma_input.h"
++#include "ma_bench.h"
++
++#define BENCH_BOOT_SETTLE_FRAMES   20
++#define BENCH_DEFAULT_WARMUP       120
++#define BENCH_DEFAULT_PACED_SEC    15
++#define BENCH_DEFAULT_UNCAPPED_SEC 8
++#define BENCH_HUD_INTERVAL_MS      250
++#define BENCH_UNCAPPED_FLIP_MS     500
++#define BENCH_ABORT_HOLD_MS        800
++#define BENCH_INITIAL_FRAME_CAP    4096
++#define BENCH_MAX_INPUT_STEPS      256
++#define BENCH_MISSED_VSYNC_FACTOR  1.25
++#define BENCH_THERMAL_PATH         "/sys/class/thermal/thermal_zone0/temp"
++
++typedef enum {
++	BENCH_PHASE_BOOT = 0,
++	BENCH_PHASE_WARMUP,
++	BENCH_PHASE_RECORD,
++	BENCH_PHASE_DONE
++} BenchPhase;
++
++typedef struct {
++	uint32_t start_frame;
++	uint32_t end_frame;
++	int16_t  lx;
++	int16_t  ly;
++	uint32_t buttons;
++} BenchInputStep;
++
++typedef struct {
++	double   frame_ms;
++	uint8_t  was_new_frame;
++} BenchFrameSample;
++
++typedef struct {
++	int active;
++	int uncapped;
++	int aborted;
++	int state_failed;
++
++	const char *cfg_path;
++	const char *state_path;
++	const char *input_path;
++	const char *out_json_path;
++	const char *out_csv_path;
++	const char *label;
++
++	uint32_t warmup_frames;
++	double   duration_sec;
++
++	BenchPhase phase;
++	uint32_t   phase_frames;
++	uint32_t   script_frame;
++
++	uint64_t frame_start_us;
++	uint64_t record_start_us;
++	uint64_t record_end_us;
++	uint32_t last_hud_ms;
++	uint32_t last_uncapped_flip_ms;
++	uint32_t menu_hold_start_ms;
++
++	int      frame_got_video;
++	int      frame_was_new;
++	int      frame_did_uncapped_flip;
++	unsigned last_width;
++	unsigned last_height;
++
++	uint32_t vi_frames;
++	uint32_t rendered_frames;
++	uint32_t duplicate_frames;
++	uint32_t skipped_frames;
++	uint32_t missed_vsyncs;
++	uint32_t audio_underruns;
++
++	double   temp_start_c;
++	double   temp_end_c;
++
++	BenchFrameSample *samples;
++	size_t            sample_count;
++	size_t            sample_cap;
++
++	BenchInputStep inputs[BENCH_MAX_INPUT_STEPS];
++	int            input_count;
++
++	SDL_Surface *hud_surface;
++} BenchState;
++
++static BenchState bench = {0};
++
++static int bench_read_env_int(const char *name, int fallback) {
++	const char *val = getenv(name);
++	if (!val || !val[0]) return fallback;
++	int parsed = atoi(val);
++	return parsed > 0 ? parsed : fallback;
++}
++
++static double bench_read_soc_temp_c(void) {
++	FILE *fp = fopen(BENCH_THERMAL_PATH, "r");
++	if (!fp) return -1.0;
++	long raw = 0;
++	int ok = (fscanf(fp, "%ld", &raw) == 1);
++	fclose(fp);
++	if (!ok) return -1.0;
++	return raw > 1000 ? (double)raw / 1000.0 : (double)raw;
++}
++
++static void bench_load_inputs(const char *path) {
++	bench.input_count = 0;
++	if (!path || !path[0]) return;
++	FILE *fp = fopen(path, "r");
++	if (!fp) {
++		LOG_warn("Bench: could not open input script %s\n", path);
++		return;
++	}
++	char line[256];
++	while (fgets(line, sizeof(line), fp) && bench.input_count < BENCH_MAX_INPUT_STEPS) {
++		if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
++		unsigned int start_f = 0, end_f = 0, btn_mask = 0;
++		int lx = 0, ly = 0;
++		if (sscanf(line, "%u %u %d %d %u", &start_f, &end_f, &lx, &ly, &btn_mask) == 5) {
++			BenchInputStep *step = &bench.inputs[bench.input_count++];
++			step->start_frame = start_f;
++			step->end_frame = end_f;
++			step->lx = (int16_t)lx;
++			step->ly = (int16_t)ly;
++			step->buttons = btn_mask;
++		}
++	}
++	fclose(fp);
++	LOG_info("Bench: loaded %d scripted input steps from %s\n", bench.input_count, path);
++}
++
++static void bench_append_sample(double frame_ms, int was_new_frame) {
++	if (bench.sample_count >= bench.sample_cap) {
++		size_t next_cap = bench.sample_cap ? bench.sample_cap * 2 : BENCH_INITIAL_FRAME_CAP;
++		BenchFrameSample *grown = realloc(bench.samples, next_cap * sizeof(BenchFrameSample));
++		if (!grown) return;
++		bench.samples = grown;
++		bench.sample_cap = next_cap;
++	}
++	bench.samples[bench.sample_count].frame_ms = frame_ms;
++	bench.samples[bench.sample_count].was_new_frame = was_new_frame ? 1 : 0;
++	bench.sample_count++;
++}
++
++static int bench_compare_double(const void *a, const void *b) {
++	double da = *(const double *)a;
++	double db = *(const double *)b;
++	return (da > db) - (da < db);
++}
++
++static double bench_percentile(const double *sorted, size_t n, double p) {
++	if (n == 0) return 0.0;
++	double idx = (p / 100.0) * (double)(n - 1);
++	size_t lo = (size_t)idx;
++	size_t hi = (lo + 1 < n) ? lo + 1 : lo;
++	double frac = idx - (double)lo;
++	return sorted[lo] * (1.0 - frac) + sorted[hi] * frac;
++}
++
++static double bench_low_fps(const double *sorted, size_t n, double worst_fraction) {
++	if (n == 0) return 0.0;
++	size_t tail_count = (size_t)ceil((double)n * worst_fraction);
++	if (tail_count < 1) tail_count = 1;
++	if (tail_count > n) tail_count = n;
++	double sum_ms = 0.0;
++	for (size_t i = n - tail_count; i < n; i++) {
++		sum_ms += sorted[i];
++	}
++	double avg_tail_ms = sum_ms / (double)tail_count;
++	return avg_tail_ms > 0.001 ? 1000.0 / avg_tail_ms : 0.0;
++}
++
++static void bench_blit_text(SDL_Surface *dst, TTF_Font *ttf, const char *text, int x, int y, SDL_Color color) {
++	if (!dst || !ttf || !text || !text[0]) return;
++	SDL_Surface *surf = TTF_RenderUTF8_Blended(ttf, text, color);
++	if (!surf) return;
++	SDL_Rect rc = { x, y, surf->w, surf->h };
++	SDL_BlitSurface(surf, NULL, dst, &rc);
++	SDL_FreeSurface(surf);
++}
++
++static void bench_render_hud(void) {
++	if (!screen || !font.tiny) return;
++	uint32_t now_ms = SDL_GetTicks();
++	if (bench.last_hud_ms != 0 && (now_ms - bench.last_hud_ms) < BENCH_HUD_INTERVAL_MS) return;
++	bench.last_hud_ms = now_ms;
++
++	int sw = screen->w > 0 ? screen->w : 640;
++	int bar_h = SCALE1(36);
++	if (bar_h < 44) bar_h = 44;
++
++	if (!bench.hud_surface || bench.hud_surface->w != sw || bench.hud_surface->h != bar_h) {
++		if (bench.hud_surface) SDL_FreeSurface(bench.hud_surface);
++		bench.hud_surface = SDL_CreateRGBSurfaceWithFormat(0, sw, bar_h, 32, SDL_PIXELFORMAT_ABGR8888);
++		if (!bench.hud_surface) return;
++	}
++
++	SDL_FillRect(bench.hud_surface, NULL, SDL_MapRGBA(bench.hud_surface->format, 10, 12, 18, 205));
++
++	double progress = 0.0;
++	char line1[256];
++	char line2[256];
++	const char *mode_tag = bench.uncapped ? "UNCAPPED" : "PACED";
++
++	if (bench.phase == BENCH_PHASE_BOOT) {
++		snprintf(line1, sizeof(line1), "[%s] %s", mode_tag, bench.label ? bench.label : "N64 Benchmark");
++		snprintf(line2, sizeof(line2), "Initializing core & loading savestate... (hold MENU to cancel)");
++	}
++	else if (bench.phase == BENCH_PHASE_WARMUP) {
++		progress = bench.warmup_frames > 0 ? (double)bench.phase_frames / (double)bench.warmup_frames : 1.0;
++		snprintf(line1, sizeof(line1), "[%s · WARMUP] %s", mode_tag, bench.label ? bench.label : "N64 Benchmark");
++		snprintf(line2, sizeof(line2), "Warming shaders %u/%u frames... (hold MENU to cancel)",
++			bench.phase_frames, bench.warmup_frames);
++	}
++	else {
++		double elapsed_s = (double)(getMicroseconds() - bench.record_start_us) / 1e6;
++		if (elapsed_s < 0.001) elapsed_s = 0.001;
++		progress = bench.duration_sec > 0.0 ? elapsed_s / bench.duration_sec : 1.0;
++		if (progress > 1.0) progress = 1.0;
++
++		double vi_fps = (double)bench.vi_frames / elapsed_s;
++		double ren_fps = (double)bench.rendered_frames / elapsed_s;
++		double avg_ms = bench.vi_frames > 0 ? (elapsed_s * 1000.0) / (double)bench.vi_frames : 0.0;
++		double temp_c = bench_read_soc_temp_c();
++
++		snprintf(line1, sizeof(line1), "[%s] %s", mode_tag, bench.label ? bench.label : "N64 Benchmark");
++		if (temp_c > 0.0) {
++			snprintf(line2, sizeof(line2),
++				"VI: %.1f fps | 3D: %.1f fps | %.1f ms | %.0fs/%.0fs | %.0fC | Hold MENU: Stop",
++				vi_fps, ren_fps, avg_ms, elapsed_s, bench.duration_sec, temp_c);
++		}
++		else {
++			snprintf(line2, sizeof(line2),
++				"VI: %.1f fps | 3D: %.1f fps | %.1f ms | %.0fs/%.0fs | Hold MENU: Stop",
++				vi_fps, ren_fps, avg_ms, elapsed_s, bench.duration_sec);
++		}
++	}
++
++	SDL_Color white = { 245, 248, 255, 255 };
++	SDL_Color accent = bench.uncapped
++		? (SDL_Color){ 255, 208, 96, 255 }
++		: (SDL_Color){ 126, 232, 160, 255 };
++
++	int pad_x = 10;
++	bench_blit_text(bench.hud_surface, font.tiny, line1, pad_x, 4, white);
++	bench_blit_text(bench.hud_surface, font.tiny, line2, pad_x, bar_h / 2 - 1, accent);
++
++	int pb_h = 4;
++	SDL_Rect pb_bg = { 0, bar_h - pb_h, sw, pb_h };
++	SDL_FillRect(bench.hud_surface, &pb_bg, SDL_MapRGBA(bench.hud_surface->format, 45, 50, 62, 255));
++	int fill_w = (int)((double)sw * progress);
++	if (fill_w > 0) {
++		SDL_Rect pb_fg = { 0, bar_h - pb_h, fill_w, pb_h };
++		SDL_FillRect(bench.hud_surface, &pb_fg,
++			SDL_MapRGBA(bench.hud_surface->format, accent.r, accent.g, accent.b, 255));
++	}
++
++	PLAT_setNotificationSurface(bench.hud_surface, 0, 0);
++}
++
++static void bench_write_outputs(void) {
++	double elapsed_s = (bench.record_end_us > bench.record_start_us)
++		? (double)(bench.record_end_us - bench.record_start_us) / 1e6
++		: 0.0;
++
++	double *sorted = NULL;
++	double ms_avg = 0.0, ms_p50 = 0.0, ms_p95 = 0.0, ms_p99 = 0.0, ms_max = 0.0;
++	double fps_1pct = 0.0, fps_01pct = 0.0;
++
++	if (bench.sample_count > 0) {
++		sorted = malloc(bench.sample_count * sizeof(double));
++		if (sorted) {
++			double sum = 0.0;
++			for (size_t i = 0; i < bench.sample_count; i++) {
++				sorted[i] = bench.samples[i].frame_ms;
++				sum += sorted[i];
++			}
++			qsort(sorted, bench.sample_count, sizeof(double), bench_compare_double);
++			ms_avg = sum / (double)bench.sample_count;
++			ms_p50 = bench_percentile(sorted, bench.sample_count, 50.0);
++			ms_p95 = bench_percentile(sorted, bench.sample_count, 95.0);
++			ms_p99 = bench_percentile(sorted, bench.sample_count, 99.0);
++			ms_max = sorted[bench.sample_count - 1];
++			fps_1pct = bench_low_fps(sorted, bench.sample_count, 0.01);
++			fps_01pct = bench_low_fps(sorted, bench.sample_count, 0.001);
++			free(sorted);
++		}
++	}
++
++	double vi_fps = elapsed_s > 0.0 ? (double)bench.vi_frames / elapsed_s : 0.0;
++	double ren_fps = elapsed_s > 0.0 ? (double)bench.rendered_frames / elapsed_s : 0.0;
++	double target_fps = core.fps > 1.0 ? core.fps : 60.0;
++	double speed_pct = (vi_fps / target_fps) * 100.0;
++
++	if (bench.out_csv_path && bench.out_csv_path[0] && bench.sample_count > 0) {
++		FILE *csv = fopen(bench.out_csv_path, "w");
++		if (csv) {
++			fprintf(csv, "vi_index,frame_ms,was_new_frame\n");
++			for (size_t i = 0; i < bench.sample_count; i++) {
++				fprintf(csv, "%zu,%.3f,%u\n",
++					i, bench.samples[i].frame_ms, (unsigned)bench.samples[i].was_new_frame);
++			}
++			fclose(csv);
++		}
++	}
++
++	if (bench.out_json_path && bench.out_json_path[0]) {
++		FILE *js = fopen(bench.out_json_path, "w");
++		if (js) {
++			fprintf(js, "{\n");
++			fprintf(js, "  \"mode\": \"%s\",\n", bench.uncapped ? "uncapped" : "paced");
++			fprintf(js, "  \"status\": \"%s\",\n",
++				bench.aborted ? "aborted" : (bench.state_failed ? "state_failed" : "ok"));
++			fprintf(js, "  \"elapsed_sec\": %.4f,\n", elapsed_s);
++			fprintf(js, "  \"core_fps\": %.4f,\n", target_fps);
++			fprintf(js, "  \"width\": %u,\n", bench.last_width);
++			fprintf(js, "  \"height\": %u,\n", bench.last_height);
++			fprintf(js, "  \"vi_frames\": %u,\n", bench.vi_frames);
++			fprintf(js, "  \"rendered_frames\": %u,\n", bench.rendered_frames);
++			fprintf(js, "  \"duplicate_frames\": %u,\n", bench.duplicate_frames);
++			fprintf(js, "  \"skipped_frames\": %u,\n", bench.skipped_frames);
++			fprintf(js, "  \"vi_fps_avg\": %.3f,\n", vi_fps);
++			fprintf(js, "  \"rendered_fps_avg\": %.3f,\n", ren_fps);
++			fprintf(js, "  \"speed_pct\": %.2f,\n", speed_pct);
++			fprintf(js, "  \"frame_ms_avg\": %.3f,\n", ms_avg);
++			fprintf(js, "  \"frame_ms_p50\": %.3f,\n", ms_p50);
++			fprintf(js, "  \"frame_ms_p95\": %.3f,\n", ms_p95);
++			fprintf(js, "  \"frame_ms_p99\": %.3f,\n", ms_p99);
++			fprintf(js, "  \"frame_ms_max\": %.3f,\n", ms_max);
++			fprintf(js, "  \"fps_1pct_low\": %.3f,\n", fps_1pct);
++			fprintf(js, "  \"fps_01pct_low\": %.3f,\n", fps_01pct);
++			fprintf(js, "  \"missed_vsyncs\": %u,\n", bench.missed_vsyncs);
++			fprintf(js, "  \"audio_underruns\": %u,\n", bench.audio_underruns);
++			fprintf(js, "  \"soc_temp_start_c\": %.2f,\n", bench.temp_start_c);
++			fprintf(js, "  \"soc_temp_end_c\": %.2f\n", bench.temp_end_c);
++			fprintf(js, "}\n");
++			fclose(js);
++		}
++	}
++
++	LOG_info("Bench DONE [%s]: vi=%.2f fps, 3d=%.2f fps (%.1f%%), avg=%.2fms, p99=%.2fms, 1%%low=%.2f\n",
++		bench.uncapped ? "uncapped" : "paced", vi_fps, ren_fps, speed_pct, ms_avg, ms_p99, fps_1pct);
++}
++
++void Bench_initFromEnv(void) {
++	memset(&bench, 0, sizeof(bench));
++	const char *en = getenv("BENCH_ENABLE");
++	if (!en || strcmp(en, "1") != 0) return;
++
++	bench.active = 1;
++	const char *mode = getenv("BENCH_MODE");
++	bench.uncapped = (mode && strcmp(mode, "uncapped") == 0) ? 1 : 0;
++
++	bench.cfg_path = getenv("BENCH_CFG_PATH");
++	bench.state_path = getenv("BENCH_STATE_PATH");
++	bench.input_path = getenv("BENCH_INPUT_FILE");
++	bench.out_json_path = getenv("BENCH_OUT_JSON");
++	bench.out_csv_path = getenv("BENCH_OUT_CSV");
++	bench.label = getenv("BENCH_LABEL");
++
++	bench.warmup_frames = (uint32_t)bench_read_env_int("BENCH_WARMUP_FRAMES", BENCH_DEFAULT_WARMUP);
++	bench.duration_sec = (double)bench_read_env_int("BENCH_DURATION_SEC",
++		bench.uncapped ? BENCH_DEFAULT_UNCAPPED_SEC : BENCH_DEFAULT_PACED_SEC);
++	bench.phase = BENCH_PHASE_BOOT;
++	bench.temp_start_c = -1.0;
++	bench.temp_end_c = -1.0;
++
++	bench_load_inputs(bench.input_path);
++
++	if (bench.uncapped) {
++		fast_forward = 1;
++	}
++
++	LOG_info("Bench initialized: mode=%s warmup=%u duration=%.0fs state=%s\n",
++		bench.uncapped ? "uncapped" : "paced",
++		bench.warmup_frames, bench.duration_sec,
++		bench.state_path ? bench.state_path : "(none)");
++}
++
++int Bench_isActive(void) {
++	return bench.active;
++}
++
++int Bench_isUncapped(void) {
++	return bench.active && bench.uncapped;
++}
++
++const char *Bench_getConfigPath(void) {
++	return (bench.active && bench.cfg_path && bench.cfg_path[0]) ? bench.cfg_path : NULL;
++}
++
++int Bench_getExitCode(void) {
++	if (!bench.active) return BENCH_EXIT_OK;
++	if (bench.aborted) return BENCH_EXIT_ABORTED;
++	if (bench.state_failed) return BENCH_EXIT_STATE_FAIL;
++	return BENCH_EXIT_OK;
++}
++
++void Bench_onFrameBegin(void) {
++	if (!bench.active) return;
++
++	bench.frame_got_video = 0;
++	bench.frame_was_new = 0;
++	bench.frame_did_uncapped_flip = 0;
++	bench.frame_start_us = getMicroseconds();
++
++	if (bench.uncapped) {
++		fast_forward = 1;
++	}
++}
++
++void Bench_onVideoFrame(int is_new_frame, unsigned width, unsigned height) {
++	if (!bench.active) return;
++	bench.frame_got_video = 1;
++	if (is_new_frame) bench.frame_was_new = 1;
++	if (width > 0 && height > 0) {
++		bench.last_width = width;
++		bench.last_height = height;
++	}
++}
++
++int Bench_shouldSkipFlipUncapped(void) {
++	if (!bench.active || !bench.uncapped) return 0;
++	uint32_t now_ms = SDL_GetTicks();
++	if (bench.last_uncapped_flip_ms != 0 && (now_ms - bench.last_uncapped_flip_ms) < BENCH_UNCAPPED_FLIP_MS) {
++		return 1;
++	}
++	bench.last_uncapped_flip_ms = now_ms;
++	bench.frame_did_uncapped_flip = 1;
++	return 0;
++}
++
++void Bench_onAudioBatch(void) {
++	if (!bench.active || bench.uncapped || bench.phase != BENCH_PHASE_RECORD) return;
++	if (perf.buffer_size > 0 && perf.buffer_free >= perf.buffer_size - 64) {
++		bench.audio_underruns++;
++	}
++}
++
++void Bench_onFrameEnd(void) {
++	if (!bench.active) return;
++
++	uint64_t now_us = getMicroseconds();
++	double frame_ms = (double)(now_us - bench.frame_start_us) / 1000.0;
++
++	if (bench.phase == BENCH_PHASE_BOOT) {
++		bench.phase_frames++;
++		if (bench.phase_frames >= BENCH_BOOT_SETTLE_FRAMES) {
++			if (bench.state_path && bench.state_path[0]) {
++				if (!State_readPath(bench.state_path)) {
++					LOG_error("Bench: failed to load savestate %s\n", bench.state_path);
++					bench.state_failed = 1;
++					bench.phase = BENCH_PHASE_DONE;
++					quit = 1;
++					return;
++				}
++				LOG_info("Bench: loaded savestate %s\n", bench.state_path);
++			}
++			bench.phase = BENCH_PHASE_WARMUP;
++			bench.phase_frames = 0;
++			bench.script_frame = 0;
++			bench.last_hud_ms = 0;
++		}
++	}
++	else if (bench.phase == BENCH_PHASE_WARMUP) {
++		bench.phase_frames++;
++		if (bench.phase_frames >= bench.warmup_frames) {
++			bench.phase = BENCH_PHASE_RECORD;
++			bench.phase_frames = 0;
++			bench.script_frame = 0;
++			bench.record_start_us = getMicroseconds();
++			bench.temp_start_c = bench_read_soc_temp_c();
++			bench.last_hud_ms = 0;
++		}
++	}
++	else if (bench.phase == BENCH_PHASE_RECORD) {
++		bench.vi_frames++;
++		bench.script_frame++;
++
++		if (!bench.frame_got_video) {
++			bench.skipped_frames++;
++		}
++		else if (bench.frame_was_new) {
++			bench.rendered_frames++;
++		}
++		else {
++			bench.duplicate_frames++;
++		}
++
++		// Exclude periodic uncapped HUD flip frames from frame-time stats so raw throughput is pure.
++		if (!(bench.uncapped && bench.frame_did_uncapped_flip)) {
++			bench_append_sample(frame_ms, bench.frame_was_new);
++			if (!bench.uncapped) {
++				double target_ms = 1000.0 / (core.fps > 1.0 ? core.fps : 60.0);
++				if (frame_ms > target_ms * BENCH_MISSED_VSYNC_FACTOR) {
++					bench.missed_vsyncs++;
++				}
++			}
++		}
++
++		double elapsed_s = (double)(now_us - bench.record_start_us) / 1e6;
++		if (elapsed_s >= bench.duration_sec) {
++			bench.record_end_us = now_us;
++			bench.temp_end_c = bench_read_soc_temp_c();
++			bench.phase = BENCH_PHASE_DONE;
++			quit = 1;
++		}
++	}
++
++	bench_render_hud();
++}
++
++int Bench_getScriptedInput(unsigned port, unsigned device, unsigned index, unsigned id, int16_t *out_value) {
++	if (!bench.active || !out_value) return 0;
++	if (port != 0) {
++		*out_value = 0;
++		return 1;
++	}
++
++	uint32_t btn_mask = 0;
++	int16_t lx = 0;
++	int16_t ly = 0;
++
++	if (bench.phase == BENCH_PHASE_RECORD) {
++		for (int i = 0; i < bench.input_count; i++) {
++			const BenchInputStep *step = &bench.inputs[i];
++			if (bench.script_frame >= step->start_frame && bench.script_frame < step->end_frame) {
++				btn_mask |= step->buttons;
++				lx = step->lx;
++				ly = step->ly;
++			}
++		}
++	}
++
++	if (device == RETRO_DEVICE_JOYPAD && index == 0) {
++		*out_value = (id == RETRO_DEVICE_ID_JOYPAD_MASK)
++			? (int16_t)btn_mask
++			: (int16_t)((btn_mask >> id) & 1);
++		return 1;
++	}
++	if (device == RETRO_DEVICE_ANALOG && index == RETRO_DEVICE_INDEX_ANALOG_LEFT) {
++		if (id == RETRO_DEVICE_ID_ANALOG_X) { *out_value = lx; return 1; }
++		if (id == RETRO_DEVICE_ID_ANALOG_Y) { *out_value = ly; return 1; }
++	}
++	*out_value = 0;
++	return 1;
++}
++
++int Bench_checkAbortInput(void) {
++	if (!bench.active) return 0;
++	if (PAD_isPressed(BTN_MENU)) {
++		uint32_t now_ms = SDL_GetTicks();
++		if (bench.menu_hold_start_ms == 0) {
++			bench.menu_hold_start_ms = now_ms;
++		}
++		else if ((now_ms - bench.menu_hold_start_ms) >= BENCH_ABORT_HOLD_MS) {
++			LOG_info("Bench: aborted by user (MENU hold)\n");
++			bench.aborted = 1;
++			bench.record_end_us = getMicroseconds();
++			bench.temp_end_c = bench_read_soc_temp_c();
++			bench.phase = BENCH_PHASE_DONE;
++			quit = 1;
++			return 1;
++		}
++	}
++	else {
++		bench.menu_hold_start_ms = 0;
++	}
++	return 1;
++}
++
++void Bench_finish(void) {
++	if (!bench.active) return;
++
++	if (bench.record_end_us == 0 && bench.record_start_us > 0) {
++		bench.record_end_us = getMicroseconds();
++		bench.temp_end_c = bench_read_soc_temp_c();
++	}
++	bench_write_outputs();
++
++	PLAT_clearNotificationSurface();
++	if (bench.hud_surface) {
++		SDL_FreeSurface(bench.hud_surface);
++		bench.hud_surface = NULL;
++	}
++	if (bench.samples) {
++		free(bench.samples);
++		bench.samples = NULL;
++	}
++}
+diff --git a/workspace/all/minarch/ma_bench.h b/workspace/all/minarch/ma_bench.h
+new file mode 100644
+index 00000000..a6eb2723
+--- /dev/null
++++ b/workspace/all/minarch/ma_bench.h
+@@ -0,0 +1,25 @@
++#pragma once
++
++#include <stdint.h>
++#include <stddef.h>
++
++#define BENCH_EXIT_OK          0
++#define BENCH_EXIT_STATE_FAIL  2
++#define BENCH_EXIT_ABORTED     42
++
++void Bench_initFromEnv(void);
++int  Bench_isActive(void);
++int  Bench_isUncapped(void);
++const char *Bench_getConfigPath(void);
++int  Bench_getExitCode(void);
++
++void Bench_onFrameBegin(void);
++void Bench_onVideoFrame(int is_new_frame, unsigned width, unsigned height);
++int  Bench_shouldSkipFlipUncapped(void);
++void Bench_onAudioBatch(void);
++void Bench_onFrameEnd(void);
++
++int  Bench_getScriptedInput(unsigned port, unsigned device, unsigned index, unsigned id, int16_t *out_value);
++int  Bench_checkAbortInput(void);
++
++void Bench_finish(void);
+diff --git a/workspace/all/minarch/ma_config.c b/workspace/all/minarch/ma_config.c
+index 8dce3c9a..229ec675 100644
+--- a/workspace/all/minarch/ma_config.c
++++ b/workspace/all/minarch/ma_config.c
+@@ -7,6 +7,7 @@
+ #include "ma_internal.h"
+ #include "ma_options.h"
+ #include "ma_config.h"
++#include "ma_bench.h"
+ 
+ static ButtonMapping button_label_mapping[] = { // used to lookup the retro_id and local btn_id from button name
+ 	{"NONE",	-1,								BTN_ID_NONE},
+@@ -566,6 +567,16 @@ void Config_load(void) {
+ 	
+ 	char path[MAX_PATH];
+ 	config.loaded = CONFIG_NONE;
++	const char *bench_cfg = Bench_getConfigPath();
++	if (bench_cfg) {
++		config.default_cfg = NULL;
++		config.user_cfg = allocFile((char *)bench_cfg);
++		if (config.user_cfg) {
++			LOG_info("using benchmark config: %s\n", bench_cfg);
++			config.loaded = CONFIG_CONSOLE;
++		}
++		return;
++	}
+ 	int override = 0;
+ 	Config_getPath(path, CONFIG_WRITE_GAME);
+ 	if (exists(path)) override = 1; 
+diff --git a/workspace/all/minarch/ma_input.c b/workspace/all/minarch/ma_input.c
+index 3233b214..2f582a7a 100644
+--- a/workspace/all/minarch/ma_input.c
++++ b/workspace/all/minarch/ma_input.c
+@@ -1,5 +1,6 @@
+ #include "ma_internal.h"
+ #include "ma_input.h"
++#include "ma_bench.h"
+ 
+ #include <string.h>
+ 
+@@ -17,6 +18,10 @@ static int ignore_menu = 0;
+ void input_poll_callback(void) {
+ 	PAD_poll();
+ 
++	if (Bench_checkAbortInput()) {
++		return;
++	}
++
+ 	int show_setting = 0;
+ 	PWR_update(NULL, &show_setting, Menu_beforeSleep, Menu_afterSleep);
+ 
+@@ -218,6 +223,10 @@ void input_poll_callback(void) {
+ 
+ }
+ int16_t input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
++	int16_t bench_val = 0;
++	if (Bench_getScriptedInput(port, device, index, id, &bench_val)) {
++		return bench_val;
++	}
+ 	if (port==0 && device==RETRO_DEVICE_JOYPAD && index==0) {
+ 		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return buttons;
+ 		return (buttons >> id) & 1;
+diff --git a/workspace/all/minarch/ma_runframe.c b/workspace/all/minarch/ma_runframe.c
+index 696b8ef2..8eefe5e7 100644
+--- a/workspace/all/minarch/ma_runframe.c
++++ b/workspace/all/minarch/ma_runframe.c
+@@ -5,6 +5,7 @@
+ #include "ma_input.h"
+ #include "ma_config.h"
+ #include "ma_runframe.h"
++#include "ma_bench.h"
+ 
+ void chooseSyncRef(void) {
+ 	switch (sync_ref) {
+@@ -20,6 +21,7 @@ void chooseSyncRef(void) {
+ }
+ 
+ static void limitFF(void) {
++	if (Bench_isUncapped()) return;
+ 	static uint64_t ff_frame_time = 0;
+ 	static uint64_t last_time = 0;
+ 	static int last_max_speed = -1;
+diff --git a/workspace/all/minarch/ma_saves.c b/workspace/all/minarch/ma_saves.c
+index 8fe053e0..e74e2a8d 100644
+--- a/workspace/all/minarch/ma_saves.c
++++ b/workspace/all/minarch/ma_saves.c
+@@ -197,13 +197,8 @@ void State_getPath(char* filename) {
+ }
+ 
+ #define RASTATE_HEADER_SIZE 16
+-int State_read(void) { // from picoarch
+-	// Block load states in RetroAchievements hardcore mode
+-	if (RA_isHardcoreModeActive()) {
+-		LOG_info("State load blocked - hardcore mode active\n");
+-		Notification_push(NOTIFICATION_ACHIEVEMENT, "Load states disabled in Hardcore mode", NULL);
+-		return 0;
+-	}
++int State_readPath(const char* filename) {
++	if (!filename || !filename[0]) return 0;
+ 
+ 	int success = 0;
+ 	size_t state_size = core.serialize_size();
+@@ -218,9 +213,6 @@ int State_read(void) { // from picoarch
+ 		goto error;
+ 	}
+ 
+-	char filename[MAX_PATH];
+-	State_getPath(filename);
+-
+ 	uint8_t rastate_header[RASTATE_HEADER_SIZE] = {0};
+ 
+ #ifdef HAS_SRM
+@@ -301,6 +293,19 @@ error:
+ 	return success;
+ }
+ 
++int State_read(void) { // from picoarch
++	// Block load states in RetroAchievements hardcore mode
++	if (RA_isHardcoreModeActive()) {
++		LOG_info("State load blocked - hardcore mode active\n");
++		Notification_push(NOTIFICATION_ACHIEVEMENT, "Load states disabled in Hardcore mode", NULL);
++		return 0;
++	}
++
++	char filename[MAX_PATH];
++	State_getPath(filename);
++	return State_readPath(filename);
++}
++
+ int State_write(void) { // from picoarch
+ 	// Block save states in RetroAchievements hardcore mode
+ 	if (RA_isHardcoreModeActive()) {
+diff --git a/workspace/all/minarch/ma_saves.h b/workspace/all/minarch/ma_saves.h
+index 0d8882dc..6df86c60 100644
+--- a/workspace/all/minarch/ma_saves.h
++++ b/workspace/all/minarch/ma_saves.h
+@@ -7,6 +7,7 @@ void SRAM_write(void);
+ void RTC_read(void);
+ void RTC_write(void);
+ void State_getPath(char* filename);
++int  State_readPath(const char* filename);
+ int  State_read(void);
+ int  State_write(void);
+ void State_autosave(void);
+diff --git a/workspace/all/minarch/ma_video.c b/workspace/all/minarch/ma_video.c
+index 0471e7f7..5b6a6815 100644
+--- a/workspace/all/minarch/ma_video.c
++++ b/workspace/all/minarch/ma_video.c
+@@ -4,6 +4,7 @@
+ #include "ma_internal.h"
+ #include "scaler.h"
+ #include "ma_video.h"
++#include "ma_bench.h"
+ 
+ 
+ static const char* bitmap_font[] = {
+@@ -941,8 +942,14 @@ static void convert_rgb565_to_rgba(const void* src, uint32_t* dst, unsigned widt
+ }
+ 
+ static void video_refresh_hw(const void *data, unsigned width, unsigned height) {
++	int is_new = (data == RETRO_HW_FRAME_BUFFER_VALID);
+ 	if (!HWR_submitFrame(data, &width, &height)) return;
+-	if (quit || (fast_forward && (SDL_GetTicks() - last_flip_time < 30))) return;
++	Bench_onVideoFrame(is_new, width, height);
++	if (Bench_isUncapped()) {
++		if (is_new) PLAT_HWR_finish();
++		if (quit || Bench_shouldSkipFlipUncapped()) return;
++	}
++	else if (quit || (fast_forward && (SDL_GetTicks() - last_flip_time < 30))) return;
+ 
+ 	static double last_aspect = 0;
+ 
+@@ -981,6 +988,8 @@ void video_refresh_callback(const void* data, unsigned width, unsigned height, s
+ 
+ 	// Early exit if quitting to avoid rendering stale frames
+ 	if (quit) return;
++	Bench_onVideoFrame(data != NULL, width, height);
++	if (Bench_isUncapped() && Bench_shouldSkipFlipUncapped()) return;
+ 
+ 	// Allocate RGBA buffer if needed
+ 	if (!rgbaData || rgbaDataSize != width * height) {
+diff --git a/workspace/all/minarch/makefile b/workspace/all/minarch/makefile
+index ea0abdd1..32e24f7e 100644
+--- a/workspace/all/minarch/makefile
++++ b/workspace/all/minarch/makefile
+@@ -22,7 +22,7 @@ SDL?=SDL
+ TARGET = minarch
+ PRODUCT= build/$(PLATFORM)/$(TARGET).elf
+ INCDIR = -I. -I./libretro-common/include/ -I../common/ -I../../$(PLATFORM)/platform/
+-SOURCE = $(TARGET).c ma_cheats.c ma_rewind.c ma_audio.c ma_input.c \
++SOURCE = $(TARGET).c ma_bench.c ma_cheats.c ma_rewind.c ma_audio.c ma_input.c \
+          ma_options.c ma_frontend_opts.c ma_saves.c ma_video.c ma_core.c ma_game.c ma_environment.c ma_config.c ma_menu.c ma_runframe.c \
+          ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c \
+          ../common/notification.c ../../$(PLATFORM)/platform/platform.c
+diff --git a/workspace/all/minarch/minarch.c b/workspace/all/minarch/minarch.c
+index 6f3cb84c..174d6c0e 100644
+--- a/workspace/all/minarch/minarch.c
++++ b/workspace/all/minarch/minarch.c
+@@ -22,6 +22,7 @@
+ #include "ma_environment.h"
+ #include "ma_config.h"
+ #include "ma_runframe.h"
++#include "ma_bench.h"
+ 
+ ///////////////////////////////////////
+ 
+@@ -188,6 +189,7 @@ int main(int argc , char* argv[]) {
+ 	if (!game.is_open) goto finish;
+ 	
+ 	simple_mode = exists(SIMPLE_MODE_PATH);
++	Bench_initFromEnv();
+ 	
+ 	// restore options
+ 	Config_load(); // before init?
+@@ -198,8 +200,10 @@ int main(int argc , char* argv[]) {
+ 
+ 	// Initialize RetroAchievements after core.init() but before Core_load()
+ 	// Set up memory accessors for achievement memory reading
+-	RA_setMemoryAccessors(core.get_memory_data, core.get_memory_size);
+-	RA_init();
++	if (!Bench_isActive()) {
++		RA_setMemoryAccessors(core.get_memory_data, core.get_memory_size);
++		RA_init();
++	}
+ 
+ 	// TODO: find a better place to do this
+ 	// mixing static and loaded data is messy
+@@ -225,12 +229,11 @@ int main(int argc , char* argv[]) {
+ 	
+ 	// Load game for RetroAchievements tracking (must be after Notification_init)
+ 	// Pass ROM data if available, otherwise just path (for cores that load from file)
+-	{
++	if (!Bench_isActive()) {
+ 		char* rom_path_for_ra = game.tmp_path[0] ? game.tmp_path : game.path;
+ 		RA_loadGame(rom_path_for_ra, game.data, game.size, core.tag);
++		State_resume();
+ 	}
+-	
+-	State_resume();
+ 	Menu_initState(); // make ready for state shortcuts
+ 
+ 	PWR_disableAutosleep();
+@@ -272,50 +275,54 @@ int main(int argc , char* argv[]) {
+ 	while (!quit) {
+ 		GFX_startFrame();
+ 
++		Bench_onFrameBegin();
+ 		run_frame();
++		Bench_onFrameEnd();
+ 		
+-		// Process RetroAchievements for this frame
+-		RA_doFrame();
+-		
+-		// Update and render notifications overlay
+-		Notification_update(SDL_GetTicks());
+-		
+-		// Poll for volume/brightness/colortemp changes and show system indicators
+-		{
+-			static int last_volume = -1;
+-			static int last_brightness = -1;
+-			static int last_colortemp = -1;
++		if (!Bench_isActive()) {
++			// Process RetroAchievements for this frame
++			RA_doFrame();
+ 			
+-			int cur_volume = GetVolume();
+-			int cur_brightness = GetBrightness();
+-			int cur_colortemp = GetColortemp();
++			// Update and render notifications overlay
++			Notification_update(SDL_GetTicks());
+ 			
+-			if (last_volume == -1) {
+-				// First frame - just initialize cached values, don't show indicator
+-				last_volume = cur_volume;
+-				last_brightness = cur_brightness;
+-				last_colortemp = cur_colortemp;
+-			} else {
+-				// Check for changes
+-				if (cur_volume != last_volume) {
++			// Poll for volume/brightness/colortemp changes and show system indicators
++			{
++				static int last_volume = -1;
++				static int last_brightness = -1;
++				static int last_colortemp = -1;
++				
++				int cur_volume = GetVolume();
++				int cur_brightness = GetBrightness();
++				int cur_colortemp = GetColortemp();
++				
++				if (last_volume == -1) {
++					// First frame - just initialize cached values, don't show indicator
+ 					last_volume = cur_volume;
+-					if (CFG_getNotifyAdjustments())
+-						Notification_showSystemIndicator(SYSTEM_INDICATOR_VOLUME);
+-				}
+-				if (cur_brightness != last_brightness) {
+ 					last_brightness = cur_brightness;
+-					if (CFG_getNotifyAdjustments())
+-						Notification_showSystemIndicator(SYSTEM_INDICATOR_BRIGHTNESS);
+-				}
+-				if (cur_colortemp != last_colortemp) {
+ 					last_colortemp = cur_colortemp;
+-					if (CFG_getNotifyAdjustments())
+-						Notification_showSystemIndicator(SYSTEM_INDICATOR_COLORTEMP);
++				} else {
++					// Check for changes
++					if (cur_volume != last_volume) {
++						last_volume = cur_volume;
++						if (CFG_getNotifyAdjustments())
++							Notification_showSystemIndicator(SYSTEM_INDICATOR_VOLUME);
++					}
++					if (cur_brightness != last_brightness) {
++						last_brightness = cur_brightness;
++						if (CFG_getNotifyAdjustments())
++							Notification_showSystemIndicator(SYSTEM_INDICATOR_BRIGHTNESS);
++					}
++					if (cur_colortemp != last_colortemp) {
++						last_colortemp = cur_colortemp;
++						if (CFG_getNotifyAdjustments())
++							Notification_showSystemIndicator(SYSTEM_INDICATOR_COLORTEMP);
++					}
+ 				}
+ 			}
++			
++			Notification_renderToLayer(5);  // Always call - handles cleanup when inactive
+ 		}
+-		
+-		Notification_renderToLayer(5);  // Always call - handles cleanup when inactive
+ 
+ 		if (has_pending_opt_change) {
+ 			has_pending_opt_change = 0;
+@@ -340,19 +347,24 @@ int main(int argc , char* argv[]) {
+ 
+ 		hdmimon();
+ 	}
+-	int cw, ch;
+-	unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
+-	
+-	renderer.dst = pixels;
+-	SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
+-		pixels, cw, ch, 32, cw * 4, SDL_PIXELFORMAT_ABGR8888
+-	);
+-	SDL_Surface* converted = SDL_ConvertSurfaceFormat(rawSurface, screen->format->format, 0);
+-	screen = converted;
+-	SDL_FreeSurface(rawSurface);
+-	free(pixels); 
+-	GFX_animateSurfaceOpacity(converted, 0, 0, cw, ch, 255, 0, CFG_getMenuTransitions() ? 200 : 20, 1);
+-	SDL_FreeSurface(converted); 
++	if (!Bench_isActive()) {
++		int cw, ch;
++		unsigned char* pixels = GFX_GL_screenCapture(&cw, &ch);
++		
++		renderer.dst = pixels;
++		SDL_Surface* rawSurface = SDL_CreateRGBSurfaceWithFormatFrom(
++			pixels, cw, ch, 32, cw * 4, SDL_PIXELFORMAT_ABGR8888
++		);
++		SDL_Surface* converted = SDL_ConvertSurfaceFormat(rawSurface, screen->format->format, 0);
++		screen = converted;
++		SDL_FreeSurface(rawSurface);
++		free(pixels); 
++		GFX_animateSurfaceOpacity(converted, 0, 0, cw, ch, 255, 0, CFG_getMenuTransitions() ? 200 : 20, 1);
++		SDL_FreeSurface(converted); 
++	}
++	else {
++		Bench_finish();
++	}
+ 	
+ 	Video_cleanup();
+ 
+@@ -389,5 +401,5 @@ finish:
+ 	PAD_quit();
+ 	GFX_quit();
+ 	Menu_waitScreenshot();
+-	return EXIT_SUCCESS;
++	return Bench_isActive() ? Bench_getExitCode() : EXIT_SUCCESS;
+ }
