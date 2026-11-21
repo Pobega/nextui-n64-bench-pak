@@ -1,0 +1,9 @@
+build/
+dist/
+results/
+roms/*
+!roms/.gitkeep
+states/*
+!states/.gitkeep
+*.log
+.DS_Store

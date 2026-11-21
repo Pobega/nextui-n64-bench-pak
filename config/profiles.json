@@ -1,0 +1,313 @@
+{
+  "defaults": {
+    "warmup_frames": 120,
+    "paced_seconds": 15,
+    "uncapped_seconds": 8,
+    "cooldown_seconds": 2
+  },
+  "tiers": [
+    {
+      "id": "quick-240p",
+      "name": "Quick 320x240 (5 Profiles)",
+      "description": "Compare ReARMed (gles2n64, Rice, Glide64) vs ParaLLEl-N64 (Rice, Glide64) at native 320x240.",
+      "profiles": [
+        "rearmed-gles2n64-240p",
+        "rearmed-rice-240p",
+        "rearmed-glide64-240p",
+        "parallel-rice-240p",
+        "parallel-glide64-240p"
+      ]
+    },
+    {
+      "id": "hires-480p",
+      "name": "Hi-Res 640x480 (5 Profiles)",
+      "description": "Compare ReARMed and ParaLLEl-N64 across all renderers at 640x480.",
+      "profiles": [
+        "rearmed-gles2n64-480p",
+        "rearmed-rice-480p",
+        "rearmed-glide64-480p",
+        "parallel-rice-480p",
+        "parallel-glide64-480p"
+      ]
+    },
+    {
+      "id": "frameskip-compare",
+      "name": "Frameskip Compare (ReARMed)",
+      "description": "Compare ReARMed native frameskip (-1) vs off on gles2n64 and Glide64.",
+      "profiles": [
+        "rearmed-gles2n64-240p",
+        "rearmed-gles2n64-240p-fs1",
+        "rearmed-glide64-240p",
+        "rearmed-glide64-240p-fs1"
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "rearmed-gles2n64-240p",
+      "label": "ReARMed · gles2n64 · 320x240",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "gles2n64",
+      "resolution": "320x240",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "gln64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "320x240",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-gles2n64-frameskip": "0",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "rearmed-rice-240p",
+      "label": "ReARMed · Rice · 320x240",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "rice",
+      "resolution": "320x240",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "rice",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "320x240",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-rice-frameskip": "disabled",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "rearmed-glide64-240p",
+      "label": "ReARMed · Glide64 · 320x240",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "glide64",
+      "resolution": "320x240",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "glide64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "320x240",
+        "parallel-n64-gfxplugin-accuracy": "medium",
+        "parallel-n64-filtering": "bilinear",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-glide64-frameskip": "0",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "parallel-rice-240p",
+      "label": "ParaLLEl · Rice · 320x240",
+      "core": "parallel_n64_libretro.so",
+      "renderer": "rice",
+      "resolution": "320x240",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "rice",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "320x240",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "parallel-glide64-240p",
+      "label": "ParaLLEl · Glide64 · 320x240",
+      "core": "parallel_n64_libretro.so",
+      "renderer": "glide64",
+      "resolution": "320x240",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "glide64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "320x240",
+        "parallel-n64-gfxplugin-accuracy": "medium",
+        "parallel-n64-filtering": "bilinear",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "rearmed-gles2n64-480p",
+      "label": "ReARMed · gles2n64 · 640x480",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "gles2n64",
+      "resolution": "640x480",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "gln64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "640x480",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-gles2n64-frameskip": "0",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "rearmed-rice-480p",
+      "label": "ReARMed · Rice · 640x480",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "rice",
+      "resolution": "640x480",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "rice",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "640x480",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-rice-frameskip": "disabled",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "rearmed-glide64-480p",
+      "label": "ReARMed · Glide64 · 640x480",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "glide64",
+      "resolution": "640x480",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "glide64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "640x480",
+        "parallel-n64-gfxplugin-accuracy": "medium",
+        "parallel-n64-filtering": "bilinear",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-glide64-frameskip": "0",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "parallel-rice-480p",
+      "label": "ParaLLEl · Rice · 640x480",
+      "core": "parallel_n64_libretro.so",
+      "renderer": "rice",
+      "resolution": "640x480",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "rice",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "640x480",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "parallel-glide64-480p",
+      "label": "ParaLLEl · Glide64 · 640x480",
+      "core": "parallel_n64_libretro.so",
+      "renderer": "glide64",
+      "resolution": "640x480",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "glide64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "640x480",
+        "parallel-n64-gfxplugin-accuracy": "medium",
+        "parallel-n64-filtering": "bilinear",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "rearmed-gles2n64-240p-fs1",
+      "label": "ReARMed · gles2n64 · 320x240 (FS -1)",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "gles2n64",
+      "resolution": "320x240",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "gln64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "320x240",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-gles2n64-frameskip": "-1",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    },
+    {
+      "id": "rearmed-glide64-240p-fs1",
+      "label": "ReARMed · Glide64 · 320x240 (FS -1)",
+      "core": "mupen64plus_rearmed_libretro.so",
+      "renderer": "glide64",
+      "resolution": "320x240",
+      "options": {
+        "minarch_cpu_speed": "Performance",
+        "minarch_sync_reference": "Auto",
+        "minarch_rewind_enable": "Off",
+        "parallel-n64-gfxplugin": "glide64",
+        "parallel-n64-rspplugin": "hle",
+        "parallel-n64-cpucore": "dynamic_recompiler",
+        "parallel-n64-disable_expmem": "enabled",
+        "parallel-n64-framerate": "fullspeed",
+        "parallel-n64-screensize": "320x240",
+        "parallel-n64-gfxplugin-accuracy": "medium",
+        "parallel-n64-filtering": "bilinear",
+        "parallel-n64-frameskip": "disabled",
+        "parallel-n64-glide64-frameskip": "-1",
+        "parallel-n64-send_allist_to_hle_rsp": "disabled",
+        "parallel-n64-enhanced-hle-audio": "disabled"
+      }
+    }
+  ]
+}
