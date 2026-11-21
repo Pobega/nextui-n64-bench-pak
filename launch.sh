@@ -36,7 +36,7 @@ PLAN_TSV="$WORK_DIR/plan.tsv"
 TAB="$(printf '\t')"
 MODE="both"
 
-mkdir -p "$WORK_DIR" "$RESULTS_ROOT"
+mkdir -p "$WORK_DIR" "$RESULTS_ROOT" "${BIOS_PATH:-/mnt/SDCARD/Bios}/N64"
 
 show_msg() {
 	minui-presenter --message "$1" --timeout 0 --confirm-show --confirm-text "OK" >/dev/null 2>&1
@@ -98,6 +98,7 @@ execute_plan() {
 
 		echo "=== [$IDX/$TOTAL_RUNS] $run_id ==="
 		BENCH_ENABLE=1 \
+		BENCH_TAG="N64" \
 		BENCH_MODE="$run_mode" \
 		BENCH_CFG_PATH="$cfg_file" \
 		BENCH_STATE_PATH="$state_path" \
@@ -178,15 +179,7 @@ cycle_mode() {
 
 while true; do
 	cat > "$MENU_JSON" <<EOF
-{"items":[
-  {"name":"Run Benchmark Tier (Recommended)"},
-  {"name":"Run Full Suite (All Profiles)"},
-  {"name":"Run Single Profile"},
-  {"name":"Run Single Scenario"},
-  {"name":"Mode: $MODE"},
-  {"name":"View Last Summary"},
-  {"name":"Exit"}
-]}
+["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Mode: $MODE","View Last Summary","Exit"]
 EOF
 	rm -f "$CHOICE_OUT"
 	minui-list --disable-auto-sleep --file "$MENU_JSON" --format json --title "N64 Benchmark ($PLATFORM)" --confirm-text "SELECT" --write-location "$CHOICE_OUT" >/dev/null

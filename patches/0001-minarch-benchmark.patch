@@ -712,6 +712,34 @@ index 8dce3c9a..229ec675 100644
  	int override = 0;
  	Config_getPath(path, CONFIG_WRITE_GAME);
  	if (exists(path)) override = 1; 
+diff --git a/workspace/all/minarch/ma_core.c b/workspace/all/minarch/ma_core.c
+index a7f77993..c231a751 100644
+--- a/workspace/all/minarch/ma_core.c
++++ b/workspace/all/minarch/ma_core.c
+@@ -9,6 +9,7 @@
+ #include "ma_input.h"
+ #include "ma_cheats.h"
+ #include "ma_core.h"
++#include "ma_bench.h"
+ 
+ 
+ void Core_getName(char* in_name, char* out_name) {
+@@ -192,9 +193,13 @@ void Core_unload(void) {
+ }
+ void Core_quit(void) {
+ 	if (core.initialized) {
+-		SRAM_write();
++		if (!Bench_isActive()) {
++			SRAM_write();
++		}
+ 		Cheats_free();
+-		RTC_write();
++		if (!Bench_isActive()) {
++			RTC_write();
++		}
+ 		HWR_makeCurrent();
+ 		core.unload_game();
+ 		HWR_contextDestroy();
 diff --git a/workspace/all/minarch/ma_input.c b/workspace/all/minarch/ma_input.c
 index 3233b214..2f582a7a 100644
 --- a/workspace/all/minarch/ma_input.c
@@ -878,7 +906,7 @@ index ea0abdd1..32e24f7e 100644
           ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c \
           ../common/notification.c ../../$(PLATFORM)/platform/platform.c
 diff --git a/workspace/all/minarch/minarch.c b/workspace/all/minarch/minarch.c
-index 6f3cb84c..174d6c0e 100644
+index 6f3cb84c..714e0363 100644
 --- a/workspace/all/minarch/minarch.c
 +++ b/workspace/all/minarch/minarch.c
 @@ -22,6 +22,7 @@
@@ -889,15 +917,23 @@ index 6f3cb84c..174d6c0e 100644
  
  ///////////////////////////////////////
  
-@@ -188,6 +189,7 @@ int main(int argc , char* argv[]) {
- 	if (!game.is_open) goto finish;
- 	
- 	simple_mode = exists(SIMPLE_MODE_PATH);
+@@ -159,7 +160,14 @@ int main(int argc , char* argv[]) {
+ 
+ 	strcpy(core_path, argv[1]);
+ 	strcpy(rom_path, argv[2]);
+-	getEmuName(rom_path, tag_name);
 +	Bench_initFromEnv();
++	if (Bench_isActive()) {
++		const char *bench_tag = getenv("BENCH_TAG");
++		snprintf(tag_name, sizeof(tag_name), "%s", (bench_tag && bench_tag[0]) ? bench_tag : "N64");
++	}
++	else {
++		getEmuName(rom_path, tag_name);
++	}
  	
- 	// restore options
- 	Config_load(); // before init?
-@@ -198,8 +200,10 @@ int main(int argc , char* argv[]) {
+ 	LOG_info("rom_path: %s\n", rom_path);
+ 	
+@@ -198,8 +206,10 @@ int main(int argc , char* argv[]) {
  
  	// Initialize RetroAchievements after core.init() but before Core_load()
  	// Set up memory accessors for achievement memory reading
@@ -910,7 +946,7 @@ index 6f3cb84c..174d6c0e 100644
  
  	// TODO: find a better place to do this
  	// mixing static and loaded data is messy
-@@ -225,12 +229,11 @@ int main(int argc , char* argv[]) {
+@@ -225,12 +235,11 @@ int main(int argc , char* argv[]) {
  	
  	// Load game for RetroAchievements tracking (must be after Notification_init)
  	// Pass ROM data if available, otherwise just path (for cores that load from file)
@@ -925,7 +961,7 @@ index 6f3cb84c..174d6c0e 100644
  	Menu_initState(); // make ready for state shortcuts
  
  	PWR_disableAutosleep();
-@@ -272,50 +275,54 @@ int main(int argc , char* argv[]) {
+@@ -272,50 +281,54 @@ int main(int argc , char* argv[]) {
  	while (!quit) {
  		GFX_startFrame();
  
@@ -1014,7 +1050,7 @@ index 6f3cb84c..174d6c0e 100644
  
  		if (has_pending_opt_change) {
  			has_pending_opt_change = 0;
-@@ -340,19 +347,24 @@ int main(int argc , char* argv[]) {
+@@ -340,19 +353,24 @@ int main(int argc , char* argv[]) {
  
  		hdmimon();
  	}
@@ -1052,7 +1088,7 @@ index 6f3cb84c..174d6c0e 100644
  	
  	Video_cleanup();
  
-@@ -389,5 +401,5 @@ finish:
+@@ -389,5 +407,5 @@ finish:
  	PAD_quit();
  	GFX_quit();
  	Menu_waitScreenshot();

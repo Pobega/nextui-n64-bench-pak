@@ -424,7 +424,7 @@ static int cmd_list_tiers(const char *profiles_path, const char *out_path) {
 	FILE *fp = fopen(out_path, "w");
 	if (!fp) { json_free(root); return 1; }
 
-	fprintf(fp, "{\"items\":[");
+	fprintf(fp, "[");
 	int first = 1;
 	if (tiers && tiers->type == JSON_ARR) {
 		for (size_t i = 0; i < tiers->count; i++) {
@@ -433,13 +433,11 @@ static int cmd_list_tiers(const char *profiles_path, const char *out_path) {
 			const char *name = json_str(t, "name", id);
 			if (!first) fputc(',', fp);
 			first = 0;
-			fprintf(fp, "{\"name\":"); json_write_escaped(fp, name);
-			fprintf(fp, ",\"value\":"); json_write_escaped(fp, id);
-			fprintf(fp, "}");
+			json_write_escaped(fp, name);
 			printf("%s\t%s\n", name, id);
 		}
 	}
-	fprintf(fp, "]}\n");
+	fprintf(fp, "]\n");
 	fclose(fp);
 	json_free(root);
 	return 0;
@@ -452,7 +450,7 @@ static int cmd_list_profiles(const char *profiles_path, const char *out_path) {
 	FILE *fp = fopen(out_path, "w");
 	if (!fp) { json_free(root); return 1; }
 
-	fprintf(fp, "{\"items\":[");
+	fprintf(fp, "[");
 	int first = 1;
 	if (profiles && profiles->type == JSON_ARR) {
 		for (size_t i = 0; i < profiles->count; i++) {
@@ -461,13 +459,11 @@ static int cmd_list_profiles(const char *profiles_path, const char *out_path) {
 			const char *label = json_str(pr, "label", id);
 			if (!first) fputc(',', fp);
 			first = 0;
-			fprintf(fp, "{\"name\":"); json_write_escaped(fp, label);
-			fprintf(fp, ",\"value\":"); json_write_escaped(fp, id);
-			fprintf(fp, "}");
+			json_write_escaped(fp, label);
 			printf("%s\t%s\n", label, id);
 		}
 	}
-	fprintf(fp, "]}\n");
+	fprintf(fp, "]\n");
 	fclose(fp);
 	json_free(root);
 	return 0;
@@ -480,7 +476,7 @@ static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, c
 	FILE *fp = fopen(out_path, "w");
 	if (!fp) { json_free(root); return 1; }
 
-	fprintf(fp, "{\"items\":[");
+	fprintf(fp, "[");
 	int first = 1;
 	if (scens && scens->type == JSON_ARR) {
 		for (size_t i = 0; i < scens->count; i++) {
@@ -498,13 +494,11 @@ static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, c
 
 			if (!first) fputc(',', fp);
 			first = 0;
-			fprintf(fp, "{\"name\":"); json_write_escaped(fp, display);
-			fprintf(fp, ",\"value\":"); json_write_escaped(fp, id);
-			fprintf(fp, "}");
+			json_write_escaped(fp, display);
 			printf("%s\t%s\n", display, id);
 		}
 	}
-	fprintf(fp, "]}\n");
+	fprintf(fp, "]\n");
 	fclose(fp);
 	json_free(root);
 	return 0;
