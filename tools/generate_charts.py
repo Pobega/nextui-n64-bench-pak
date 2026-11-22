@@ -66,7 +66,6 @@ HEATMAP_CARD_GAP = 18
 GAME_SPECS: List[Tuple[Tuple[str, ...], str, str, str]] = [
     (("conker-demo",), "Conker", "Conker's Bad Fur Day", "30 FPS"),
     (("goldeneye-demo", "goldeneye-dam"), "GoldenEye 007", "GoldenEye 007", "30 FPS"),
-    (("smash64-demo",), "Smash 64", "Super Smash Bros.", "60 FPS"),
     (("sm64-demo", "sm64-bobomb"), "Super Mario 64", "Super Mario 64", "30 FPS"),
     (("fzerox-demo", "fzerox-race"), "F-Zero X", "F-Zero X", "60 FPS"),
     (("oot-demo", "oot-hyrule"), "Ocarina of Time", "Ocarina of Time", "20 FPS"),

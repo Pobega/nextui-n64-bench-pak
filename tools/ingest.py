@@ -29,7 +29,6 @@ CANONICAL_NO_INTRO_SHA256: Dict[str, Optional[str]] = {
     "mk64-race": "d6b8538dd63f0132ecb2856e7d32816ed3c30e3e479aecd23cf83fb6ba17a5da",
     "goldeneye-demo": "2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162",
     "goldeneye-dam": "2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162",
-    "smash64-demo": None,
     "conker-demo": "32e6a8b970ec12ac5f782344945aa0c98a193832eefb687529d03bab6948714b",
 }
 
