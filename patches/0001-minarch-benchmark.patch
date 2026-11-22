@@ -47,10 +47,10 @@ index a8f66e76..c69485b5 100644
  		if (use_core_fps || fast_forward) {
 diff --git a/workspace/all/minarch/ma_bench.c b/workspace/all/minarch/ma_bench.c
 new file mode 100644
-index 00000000..cc5e2374
+index 00000000..671d7fc7
 --- /dev/null
 +++ b/workspace/all/minarch/ma_bench.c
-@@ -0,0 +1,865 @@
+@@ -0,0 +1,895 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -71,6 +71,9 @@ index 00000000..cc5e2374
 +#define BENCH_MIN_RECORD_FRAMES    60
 +#define BENCH_CONFIG_HUD_SEC       6.0
 +#define BENCH_HUD_INTERVAL_MS      250
++#define BENCH_HUD_BAR_BASE_H       26
++#define BENCH_HUD_BAR_MIN_H        38
++#define BENCH_HUD_PROGRESS_H       3
 +#define BENCH_UNCAPPED_FLIP_MS     500
 +#define BENCH_ABORT_HOLD_MS        800
 +#define BENCH_INITIAL_FRAME_CAP    4096
@@ -164,11 +167,18 @@ index 00000000..cc5e2374
 +	size_t          rec_count;
 +	size_t          rec_cap;
 +
-+	uint32_t cur_buttons;
-+	int16_t  cur_lx;
-+	int16_t  cur_ly;
-+	int16_t  cur_rx;
-+	int16_t  cur_ry;
++	uint32_t polled_buttons;
++	int16_t  polled_lx;
++	int16_t  polled_ly;
++	int16_t  polled_rx;
++	int16_t  polled_ry;
++
++	int      frame_input_seen;
++	uint32_t frame_buttons;
++	int16_t  frame_lx;
++	int16_t  frame_ly;
++	int16_t  frame_rx;
++	int16_t  frame_ry;
 +
 +	SDL_Surface *hud_surface;
 +} BenchState;
@@ -311,16 +321,20 @@ index 00000000..cc5e2374
 +	}
 +
 +	int sw = screen->w > 0 ? screen->w : 640;
-+	int bar_h = SCALE1(36);
-+	if (bar_h < 44) bar_h = 44;
++	int sh = screen->h > 0 ? screen->h : 480;
++	int bar_h = SCALE1(BENCH_HUD_BAR_BASE_H);
++	if (bar_h < BENCH_HUD_BAR_MIN_H) bar_h = BENCH_HUD_BAR_MIN_H;
++	if (bar_h > sh / 6) bar_h = sh / 6;
 +
-+	if (!bench.hud_surface || bench.hud_surface->w != sw || bench.hud_surface->h != bar_h) {
++	if (!bench.hud_surface || bench.hud_surface->w != sw || bench.hud_surface->h != sh) {
 +		if (bench.hud_surface) SDL_FreeSurface(bench.hud_surface);
-+		bench.hud_surface = SDL_CreateRGBSurfaceWithFormat(0, sw, bar_h, 32, SDL_PIXELFORMAT_ABGR8888);
++		bench.hud_surface = SDL_CreateRGBSurfaceWithFormat(0, sw, sh, 32, SDL_PIXELFORMAT_ABGR8888);
 +		if (!bench.hud_surface) return;
 +	}
 +
-+	SDL_FillRect(bench.hud_surface, NULL, SDL_MapRGBA(bench.hud_surface->format, 10, 12, 18, 205));
++	SDL_FillRect(bench.hud_surface, NULL, 0);
++	SDL_Rect bar_rc = { 0, 0, sw, bar_h };
++	SDL_FillRect(bench.hud_surface, &bar_rc, SDL_MapRGBA(bench.hud_surface->format, 10, 12, 18, 195));
 +
 +	double progress = 0.0;
 +	char line1[256];
@@ -388,10 +402,10 @@ index 00000000..cc5e2374
 +		: (SDL_Color){ 126, 232, 160, 255 };
 +
 +	int pad_x = 10;
-+	bench_blit_text(bench.hud_surface, font.tiny, line1, pad_x, 4, white);
-+	bench_blit_text(bench.hud_surface, font.tiny, line2, pad_x, bar_h / 2 - 1, accent);
++	bench_blit_text(bench.hud_surface, font.tiny, line1, pad_x, 2, white);
++	bench_blit_text(bench.hud_surface, font.tiny, line2, pad_x, bar_h / 2 - 2, accent);
 +
-+	int pb_h = 4;
++	int pb_h = BENCH_HUD_PROGRESS_H;
 +	SDL_Rect pb_bg = { 0, bar_h - pb_h, sw, pb_h };
 +	SDL_FillRect(bench.hud_surface, &pb_bg, SDL_MapRGBA(bench.hud_surface->format, 45, 50, 62, 255));
 +	int fill_w = (int)((double)sw * progress);
@@ -530,11 +544,11 @@ index 00000000..cc5e2374
 +	if (bench.rec_count > 0) {
 +		BenchInputStep *last = &bench.rec_steps[bench.rec_count - 1];
 +		if (last->end_frame == frame_idx &&
-+		    last->buttons == bench.cur_buttons &&
-+		    last->lx == bench.cur_lx &&
-+		    last->ly == bench.cur_ly &&
-+		    last->rx == bench.cur_rx &&
-+		    last->ry == bench.cur_ry) {
++		    last->buttons == bench.frame_buttons &&
++		    last->lx == bench.frame_lx &&
++		    last->ly == bench.frame_ly &&
++		    last->rx == bench.frame_rx &&
++		    last->ry == bench.frame_ry) {
 +			last->end_frame = frame_idx + 1;
 +			return;
 +		}
@@ -542,11 +556,11 @@ index 00000000..cc5e2374
 +	BenchInputStep step = {
 +		.start_frame = frame_idx,
 +		.end_frame = frame_idx + 1,
-+		.lx = bench.cur_lx,
-+		.ly = bench.cur_ly,
-+		.rx = bench.cur_rx,
-+		.ry = bench.cur_ry,
-+		.buttons = bench.cur_buttons
++		.lx = bench.frame_lx,
++		.ly = bench.frame_ly,
++		.rx = bench.frame_rx,
++		.ry = bench.frame_ry,
++		.buttons = bench.frame_buttons
 +	};
 +	bench_append_step(&bench.rec_steps, &bench.rec_count, &bench.rec_cap, &step);
 +}
@@ -680,6 +694,12 @@ index 00000000..cc5e2374
 +	bench.frame_got_video = 0;
 +	bench.frame_was_new = 0;
 +	bench.frame_did_uncapped_flip = 0;
++	bench.frame_input_seen = 0;
++	bench.frame_buttons = bench.polled_buttons;
++	bench.frame_lx = bench.polled_lx;
++	bench.frame_ly = bench.polled_ly;
++	bench.frame_rx = bench.polled_rx;
++	bench.frame_ry = bench.polled_ry;
 +	bench.frame_start_us = getMicroseconds();
 +
 +	if (bench.uncapped) {
@@ -807,11 +827,21 @@ index 00000000..cc5e2374
 +
 +void Bench_onInputPolled(uint32_t btn_mask, int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
 +	if (!bench.active || !bench.recording) return;
-+	bench.cur_buttons = btn_mask;
-+	bench.cur_lx = lx;
-+	bench.cur_ly = ly;
-+	bench.cur_rx = rx;
-+	bench.cur_ry = ry;
++	bench.polled_buttons = btn_mask;
++	bench.polled_lx = lx;
++	bench.polled_ly = ly;
++	bench.polled_rx = rx;
++	bench.polled_ry = ry;
++}
++
++void Bench_onInputRead(uint32_t btn_mask, int16_t lx, int16_t ly, int16_t rx, int16_t ry) {
++	if (!bench.active || !bench.recording || bench.phase != BENCH_PHASE_RECORD) return;
++	bench.frame_buttons = btn_mask;
++	bench.frame_lx = lx;
++	bench.frame_ly = ly;
++	bench.frame_rx = rx;
++	bench.frame_ry = ry;
++	bench.frame_input_seen = 1;
 +}
 +
 +int Bench_getScriptedInput(unsigned port, unsigned device, unsigned index, unsigned id, int16_t *out_value) {
@@ -918,10 +948,10 @@ index 00000000..cc5e2374
 +}
 diff --git a/workspace/all/minarch/ma_bench.h b/workspace/all/minarch/ma_bench.h
 new file mode 100644
-index 00000000..995ba86c
+index 00000000..aafc7536
 --- /dev/null
 +++ b/workspace/all/minarch/ma_bench.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +#pragma once
 +
 +#include <stdint.h>
@@ -948,6 +978,7 @@ index 00000000..995ba86c
 +
 +int  Bench_getScriptedInput(unsigned port, unsigned device, unsigned index, unsigned id, int16_t *out_value);
 +void Bench_onInputPolled(uint32_t btn_mask, int16_t lx, int16_t ly, int16_t rx, int16_t ry);
++void Bench_onInputRead(uint32_t btn_mask, int16_t lx, int16_t ly, int16_t rx, int16_t ry);
 +int  Bench_checkAbortInput(void);
 +
 +void Bench_finish(void);
@@ -1030,7 +1061,7 @@ index a7f77993..c231a751 100644
  		core.unload_game();
  		HWR_contextDestroy();
 diff --git a/workspace/all/minarch/ma_input.c b/workspace/all/minarch/ma_input.c
-index 3233b214..2501c26c 100644
+index 3233b214..579dfed9 100644
 --- a/workspace/all/minarch/ma_input.c
 +++ b/workspace/all/minarch/ma_input.c
 @@ -1,5 +1,6 @@
@@ -1271,21 +1302,17 @@ index 3233b214..2501c26c 100644
 +						if (ff_toggled) fast_forward = setFastForward(1);
  					}
 -					break;
--				}
--				else if (PAD_justReleased(btn)) {
--					break;
 +					if (mapping->mod && rewind_pressed) ignore_menu = 1;
  				}
+-				else if (PAD_justReleased(btn)) {
+-					break;
+-				}
 -			}
 -			else if (PAD_justPressed(btn)) {
 -				switch (i) {
 -					case SHORTCUT_SAVE_STATE:
 -						newScreenshot = 1;
 -						Menu_saveState();
--						break;
--					case SHORTCUT_LOAD_STATE: Menu_loadState(); break;
--					case SHORTCUT_SCREENSHOT:
--						Menu_screenshot();
 +				else if (i==SHORTCUT_TOGGLE_REWIND) {
 +					if (PAD_justPressed(btn)) {
 +						rewind_toggle = !rewind_toggle;
@@ -1297,6 +1324,10 @@ index 3233b214..2501c26c 100644
 +						}
 +						if (mapping->mod) ignore_menu = 1;
  						break;
+-					case SHORTCUT_LOAD_STATE: Menu_loadState(); break;
+-					case SHORTCUT_SCREENSHOT:
+-						Menu_screenshot();
+-						break;
 -					case SHORTCUT_RESET_GAME: core.reset(); break;
 -					case SHORTCUT_SAVE_QUIT:
 -						newScreenshot = 1;
@@ -1401,7 +1432,7 @@ index 3233b214..2501c26c 100644
  		for (int i = 0; i < SHORTCUT_COUNT; i++) {
  			ButtonMapping *mapping = &config.shortcuts[i];
  			if (!mapping->mod || mapping->local < 0 || mapping->local >= LOCAL_BUTTON_COUNT) continue;
-@@ -216,16 +262,33 @@ void input_poll_callback(void) {
+@@ -216,16 +262,36 @@ void input_poll_callback(void) {
  		//  && !PWR_ignoreSettingInput(btn, show_setting)
  	}
  
@@ -1423,6 +1454,9 @@ index 3233b214..2501c26c 100644
 +	int16_t bench_val = 0;
 +	if (Bench_getScriptedInput(port, device, index, id, &bench_val)) {
 +		return bench_val;
++	}
++	if (Bench_isRecording()) {
++		Bench_onInputRead(bench_live_buttons, bench_live_lx, bench_live_ly, pad.raxis.x, pad.raxis.y);
 +	}
  	if (port==0 && device==RETRO_DEVICE_JOYPAD && index==0) {
 -		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return buttons;
