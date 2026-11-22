@@ -32,6 +32,15 @@ CANONICAL_NO_INTRO_SHA256: Dict[str, Optional[str]] = {
     "conker-demo": "32e6a8b970ec12ac5f782344945aa0c98a193832eefb687529d03bab6948714b",
 }
 
+CANONICAL_STATE_SHA256: Dict[str, str] = {
+    "conker-demo": "7bbbe1a4463cdc07d09b9e0a54f63557d6943f095f5db50732281abc301252e8",
+    "fzerox-demo": "8b9cd7dde5a7cbdffa961100027fc2f72c7b109a7c459c8704da65eb2f04cc93",
+    "goldeneye-demo": "359a5b855168e5132550f2b3e6191fc3e0ef2e517027e2b95de837474615665c",
+    "mk64-demo": "7cab896e8d324e9c0c2a023e1a1d506c85f2df0cbf285978a8cde1665c057711",
+    "oot-demo": "3b877fb2aa84364119bc3fa70077d111f1efea6159bce4d470887c6caf6ddd14",
+    "sm64-demo": "fb0e1361ae5b9631ee608c483f15610f99943826388b013a44117ed63a1b955f",
+}
+
 SUPPORTED_SCHEMAS = (1, 2)
 MAX_ARCHIVE_MEMBERS = 4096
 
@@ -143,9 +152,21 @@ def evaluate_submission(summary_path: Path) -> Dict[str, Any]:
     rom_hashes_checked = 0
     rom_hashes_matched = 0
     rom_hashes_mismatched = 0
+    state_hashes_checked = 0
+    state_hashes_matched = 0
+    state_hashes_mismatched = 0
     for r in runs:
-        r_hash = str(r.get("rom_sha256", "")).strip().lower()
         sid = str(r.get("scenario_id", ""))
+        s_hash = str(r.get("state_sha256", "")).strip().lower()
+        expected_state = CANONICAL_STATE_SHA256.get(sid)
+        if s_hash and s_hash not in ("unknown", "none") and expected_state is not None:
+            state_hashes_checked += 1
+            if s_hash == expected_state:
+                state_hashes_matched += 1
+            else:
+                state_hashes_mismatched += 1
+
+        r_hash = str(r.get("rom_sha256", "")).strip().lower()
         if not r_hash or r_hash in ("unknown", "none"):
             continue
         rom_hashes_present += 1
@@ -158,7 +179,16 @@ def evaluate_submission(summary_path: Path) -> Dict[str, Any]:
         else:
             rom_hashes_mismatched += 1
 
-    if rom_hashes_present == 0:
+    if state_hashes_checked > 0 and state_hashes_mismatched == 0:
+        if rom_hashes_checked > 0 and rom_hashes_mismatched == 0:
+            hash_status = f"verified (state {state_hashes_matched}/{state_hashes_checked}, rom {rom_hashes_matched}/{rom_hashes_checked})"
+        else:
+            hash_status = f"verified (state {state_hashes_matched}/{state_hashes_checked})"
+        is_hash_mismatch = False
+    elif state_hashes_mismatched > 0:
+        hash_status = f"state mismatch ({state_hashes_matched}/{state_hashes_checked} canonical)"
+        is_hash_mismatch = True
+    elif rom_hashes_present == 0:
         hash_status = "unverified (schema v1)" if schema == 1 else "unverified (no rom_sha256)"
         is_hash_mismatch = False
     elif rom_hashes_checked == 0:
