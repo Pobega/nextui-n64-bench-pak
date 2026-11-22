@@ -47,10 +47,10 @@ index a8f66e76..c69485b5 100644
  		if (use_core_fps || fast_forward) {
 diff --git a/workspace/all/minarch/ma_bench.c b/workspace/all/minarch/ma_bench.c
 new file mode 100644
-index 00000000..8f818b5c
+index 00000000..58807fa7
 --- /dev/null
 +++ b/workspace/all/minarch/ma_bench.c
-@@ -0,0 +1,601 @@
+@@ -0,0 +1,646 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -137,6 +137,10 @@ index 00000000..8f818b5c
 +
 +	double   temp_start_c;
 +	double   temp_end_c;
++
++	int      gl_captured;
++	char     gl_renderer[256];
++	char     gl_version[256];
 +
 +	BenchFrameSample *samples;
 +	size_t            sample_count;
@@ -322,6 +326,38 @@ index 00000000..8f818b5c
 +	PLAT_setNotificationSurface(bench.hud_surface, 0, 0);
 +}
 +
++static void bench_write_json_str(FILE *fp, const char *s) {
++	fputc('"', fp);
++	if (s) {
++		for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
++			unsigned char c = *p;
++			if (c == '"') fputs("\\\"", fp);
++			else if (c == '\\') fputs("\\\\", fp);
++			else if (c == '\n') fputs("\\n", fp);
++			else if (c == '\r') fputs("\\r", fp);
++			else if (c == '\t') fputs("\\t", fp);
++			else if (c < 0x20) fprintf(fp, "\\u%04x", (unsigned)c);
++			else fputc(c, fp);
++		}
++	}
++	fputc('"', fp);
++}
++
++static void bench_capture_gl_info(void) {
++	if (bench.gl_captured) return;
++	PLAT_HWR_makeCurrent();
++	const char *r = (const char *)glGetString(GL_RENDERER);
++	const char *v = (const char *)glGetString(GL_VERSION);
++	if (r && r[0]) {
++		snprintf(bench.gl_renderer, sizeof(bench.gl_renderer), "%s", r);
++		bench.gl_captured = 1;
++	}
++	if (v && v[0]) {
++		snprintf(bench.gl_version, sizeof(bench.gl_version), "%s", v);
++		bench.gl_captured = 1;
++	}
++}
++
 +static void bench_write_outputs(void) {
 +	double elapsed_s = (bench.record_end_us > bench.record_start_us)
 +		? (double)(bench.record_end_us - bench.record_start_us) / 1e6
@@ -375,6 +411,12 @@ index 00000000..8f818b5c
 +			fprintf(js, "  \"mode\": \"%s\",\n", bench.uncapped ? "uncapped" : "paced");
 +			fprintf(js, "  \"status\": \"%s\",\n",
 +				bench.aborted ? "aborted" : (bench.state_failed ? "state_failed" : "ok"));
++			fprintf(js, "  \"gl_renderer\": ");
++			bench_write_json_str(js, bench.gl_renderer[0] ? bench.gl_renderer : "unknown");
++			fprintf(js, ",\n");
++			fprintf(js, "  \"gl_version\": ");
++			bench_write_json_str(js, bench.gl_version[0] ? bench.gl_version : "unknown");
++			fprintf(js, ",\n");
 +			fprintf(js, "  \"elapsed_sec\": %.4f,\n", elapsed_s);
 +			fprintf(js, "  \"core_fps\": %.4f,\n", target_fps);
 +			fprintf(js, "  \"width\": %u,\n", bench.last_width);
@@ -428,6 +470,8 @@ index 00000000..8f818b5c
 +	bench.phase = BENCH_PHASE_BOOT;
 +	bench.temp_start_c = -1.0;
 +	bench.temp_end_c = -1.0;
++	snprintf(bench.gl_renderer, sizeof(bench.gl_renderer), "unknown");
++	snprintf(bench.gl_version, sizeof(bench.gl_version), "unknown");
 +
 +	bench_load_inputs(bench.input_path);
 +
@@ -475,6 +519,7 @@ index 00000000..8f818b5c
 +
 +void Bench_onVideoFrame(int is_new_frame, unsigned width, unsigned height) {
 +	if (!bench.active) return;
++	bench_capture_gl_info();
 +	bench.frame_got_video = 1;
 +	if (is_new_frame) bench.frame_was_new = 1;
 +	if (width > 0 && height > 0) {

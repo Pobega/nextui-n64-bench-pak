@@ -369,9 +369,16 @@ static void sha256_file_hex(const char *path, char out_hex[65]) {
 	out_hex[64] = '\0';
 }
 
+#define MAX_SHA_CACHE      128
+
 static int file_exists(const char *path) {
 	struct stat st;
 	return path && path[0] && stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static int dir_exists(const char *path) {
+	struct stat st;
+	return path && path[0] && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 static void resolve_pak_path(const char *pak_dir, const char *rel_or_abs, char *out, size_t out_sz) {
@@ -385,6 +392,144 @@ static void resolve_pak_path(const char *pak_dir, const char *rel_or_abs, char *
 	else {
 		snprintf(out, out_sz, "%s/%s", pak_dir, rel_or_abs);
 	}
+}
+
+static int str_casecmp_n(const char *a, const char *b, size_t n) {
+	for (size_t i = 0; i < n; i++) {
+		unsigned char ca = (unsigned char)a[i];
+		unsigned char cb = (unsigned char)b[i];
+		if (!ca && !cb) return 0;
+		int diff = tolower(ca) - tolower(cb);
+		if (diff != 0) return diff;
+	}
+	return 0;
+}
+
+static int str_casecmp(const char *a, const char *b) {
+	while (*a && *b) {
+		int diff = tolower((unsigned char)*a) - tolower((unsigned char)*b);
+		if (diff != 0) return diff;
+		a++;
+		b++;
+	}
+	return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+}
+
+static int str_contains_ci(const char *haystack, const char *needle) {
+	if (!haystack || !needle || !needle[0]) return 0;
+	size_t nlen = strlen(needle);
+	for (const char *p = haystack; *p; p++) {
+		if (str_casecmp_n(p, needle, nlen) == 0 && strlen(p) >= nlen) return 1;
+	}
+	return 0;
+}
+
+static const char *path_basename_ptr(const char *path) {
+	if (!path) return "";
+	const char *slash = strrchr(path, '/');
+	return slash ? slash + 1 : path;
+}
+
+static void extract_stem(const char *filename, char *stem, size_t stem_sz) {
+	const char *base = path_basename_ptr(filename);
+	const char *dot = strrchr(base, '.');
+	size_t len = (dot && dot != base) ? (size_t)(dot - base) : strlen(base);
+	if (len >= stem_sz) len = stem_sz - 1;
+	memcpy(stem, base, len);
+	stem[len] = '\0';
+}
+
+static int has_valid_rom_ext(const char *filename, size_t *stem_len_out) {
+	static const char *const EXTS[] = { ".zip", ".z64", ".n64", ".v64" };
+	if (!filename) return 0;
+	const char *dot = strrchr(filename, '.');
+	if (!dot || dot == filename) return 0;
+	for (size_t i = 0; i < sizeof(EXTS) / sizeof(EXTS[0]); i++) {
+		if (str_casecmp(dot, EXTS[i]) == 0) {
+			if (stem_len_out) *stem_len_out = (size_t)(dot - filename);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int find_rom_in_dir(const char *dir_path, const char *target_base, const char *target_stem,
+                           char *out, size_t out_sz) {
+	if (!dir_exists(dir_path)) return 0;
+
+	char candidate[MAX_PATH_LEN * 2];
+	if (target_base && target_base[0]) {
+		int n = snprintf(candidate, sizeof(candidate), "%s/%s", dir_path, target_base);
+		if (n > 0 && (size_t)n < out_sz && file_exists(candidate)) {
+			memcpy(out, candidate, (size_t)n + 1);
+			return 1;
+		}
+	}
+
+	DIR *dp = opendir(dir_path);
+	if (!dp) return 0;
+	size_t target_stem_len = strlen(target_stem);
+	struct dirent *ent;
+	int found = 0;
+	while ((ent = readdir(dp)) != NULL) {
+		if (ent->d_name[0] == '.') continue;
+		size_t slen = 0;
+		if (!has_valid_rom_ext(ent->d_name, &slen)) continue;
+		if (slen != target_stem_len) continue;
+		if (str_casecmp_n(ent->d_name, target_stem, slen) != 0) continue;
+
+		int n = snprintf(candidate, sizeof(candidate), "%s/%s", dir_path, ent->d_name);
+		if (n > 0 && (size_t)n < out_sz && file_exists(candidate)) {
+			memcpy(out, candidate, (size_t)n + 1);
+			found = 1;
+			break;
+		}
+	}
+	closedir(dp);
+	return found;
+}
+
+static int resolve_rom_path(const char *pak_dir, const char *configured_rom, char *out, size_t out_sz) {
+	resolve_pak_path(pak_dir, configured_rom, out, out_sz);
+	if (file_exists(out)) return 1;
+	if (!configured_rom || !configured_rom[0]) return 0;
+
+	const char *base = path_basename_ptr(configured_rom);
+	char stem[MAX_STR_LEN];
+	extract_stem(base, stem, sizeof(stem));
+	if (!stem[0]) return 0;
+
+	char pak_roms[MAX_PATH_LEN];
+	snprintf(pak_roms, sizeof(pak_roms), "%s/roms", pak_dir);
+	if (find_rom_in_dir(pak_roms, base, stem, out, out_sz)) return 1;
+
+	const char *sdcard = getenv("SDCARD_PATH");
+	if (!sdcard || !sdcard[0]) sdcard = "/mnt/SDCARD";
+	char sd_roms[MAX_PATH_LEN];
+	snprintf(sd_roms, sizeof(sd_roms), "%s/Roms", sdcard);
+
+	DIR *dp = opendir(sd_roms);
+	if (dp) {
+		struct dirent *ent;
+		while ((ent = readdir(dp)) != NULL) {
+			if (ent->d_name[0] == '.') continue;
+			if (!str_contains_ci(ent->d_name, "n64") && !str_contains_ci(ent->d_name, "nintendo 64")) {
+				continue;
+			}
+			char sub_dir[MAX_PATH_LEN * 2];
+			int n = snprintf(sub_dir, sizeof(sub_dir), "%s/%s", sd_roms, ent->d_name);
+			if (n > 0 && (size_t)n < sizeof(sub_dir) && dir_exists(sub_dir)) {
+				if (find_rom_in_dir(sub_dir, base, stem, out, out_sz)) {
+					closedir(dp);
+					return 1;
+				}
+			}
+		}
+		closedir(dp);
+	}
+
+	resolve_pak_path(pak_dir, configured_rom, out, out_sz);
+	return 0;
 }
 
 static uint32_t parse_button_name(const char *name) {
@@ -406,15 +551,133 @@ static uint32_t parse_button_name(const char *name) {
 	return 0;
 }
 
+static void trim_trailing_ws(char *s) {
+	size_t n = strlen(s);
+	while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t')) {
+		s[--n] = '\0';
+	}
+}
+
 static void read_sysfs_line(const char *path, char *out, size_t out_sz, const char *fallback) {
 	snprintf(out, out_sz, "%s", fallback);
 	FILE *fp = fopen(path, "r");
 	if (!fp) return;
 	if (fgets(out, (int)out_sz, fp)) {
-		size_t n = strlen(out);
-		while (n > 0 && (out[n-1] == '\n' || out[n-1] == '\r' || out[n-1] == ' ')) out[--n] = '\0';
+		trim_trailing_ws(out);
 	}
 	fclose(fp);
+}
+
+static void read_soc_model(char *out, size_t out_sz) {
+	snprintf(out, out_sz, "unknown");
+	FILE *fp = fopen("/proc/device-tree/model", "rb");
+	if (fp) {
+		size_t n = fread(out, 1, out_sz - 1, fp);
+		fclose(fp);
+		out[n] = '\0';
+		trim_trailing_ws(out);
+		if (out[0]) return;
+	}
+	fp = fopen("/proc/cpuinfo", "r");
+	if (fp) {
+		char line[256];
+		char fallback_model[256] = {0};
+		while (fgets(line, sizeof(line), fp)) {
+			char *colon = strchr(line, ':');
+			if (!colon) continue;
+			char *val = colon + 1;
+			while (*val == ' ' || *val == '\t') val++;
+			trim_trailing_ws(val);
+			if (!val[0]) continue;
+
+			if (strncmp(line, "Hardware", 8) == 0 || strncmp(line, "Model", 5) == 0) {
+				snprintf(out, out_sz, "%s", val);
+				fclose(fp);
+				return;
+			}
+			if (!fallback_model[0] && strncmp(line, "model name", 10) == 0) {
+				snprintf(fallback_model, sizeof(fallback_model), "%s", val);
+			}
+		}
+		fclose(fp);
+		if (fallback_model[0]) {
+			snprintf(out, out_sz, "%s", fallback_model);
+			return;
+		}
+	}
+	snprintf(out, out_sz, "unknown");
+}
+
+static void read_nextui_version(char *out, size_t out_sz) {
+	const char *sys_path = getenv("SYSTEM_PATH");
+	if (!sys_path || !sys_path[0]) sys_path = "/mnt/SDCARD/.system";
+	char ver_path[MAX_PATH_LEN];
+	snprintf(ver_path, sizeof(ver_path), "%s/version.txt", sys_path);
+	read_sysfs_line(ver_path, out, out_sz, "unknown");
+	if (!out[0]) snprintf(out, out_sz, "unknown");
+}
+
+static int read_int_sysfs(const char *path, int *out_val) {
+	FILE *fp = fopen(path, "r");
+	if (!fp) return 0;
+	int val = -1;
+	int ok = (fscanf(fp, "%d", &val) == 1);
+	fclose(fp);
+	if (ok && val >= 0 && val <= 100) {
+		*out_val = val;
+		return 1;
+	}
+	return 0;
+}
+
+static int read_battery_pct(void) {
+	static const char *const KNOWN[] = {
+		"/sys/class/power_supply/battery/capacity",
+		"/sys/class/power_supply/BAT0/capacity",
+		"/sys/class/power_supply/axp2202-battery/capacity"
+	};
+	int pct = -1;
+	for (size_t i = 0; i < sizeof(KNOWN) / sizeof(KNOWN[0]); i++) {
+		if (read_int_sysfs(KNOWN[i], &pct)) return pct;
+	}
+	DIR *dp = opendir("/sys/class/power_supply");
+	if (!dp) return -1;
+	struct dirent *ent;
+	while ((ent = readdir(dp)) != NULL) {
+		if (ent->d_name[0] == '.') continue;
+		char cap_path[MAX_PATH_LEN];
+		int n = snprintf(cap_path, sizeof(cap_path), "/sys/class/power_supply/%s/capacity", ent->d_name);
+		if (n > 0 && (size_t)n < sizeof(cap_path) && read_int_sysfs(cap_path, &pct)) {
+			closedir(dp);
+			return pct;
+		}
+	}
+	closedir(dp);
+	return -1;
+}
+
+typedef struct {
+	char path[MAX_PATH_LEN];
+	char hex[65];
+} ShaCacheEntry;
+
+static void sha256_cached(ShaCacheEntry *cache, int *cache_count, const char *path, char out_hex[65]) {
+	if (!path || !path[0]) {
+		strcpy(out_hex, "none");
+		return;
+	}
+	for (int i = 0; i < *cache_count; i++) {
+		if (strcmp(cache[i].path, path) == 0) {
+			strcpy(out_hex, cache[i].hex);
+			return;
+		}
+	}
+	sha256_file_hex(path, out_hex);
+	if (*cache_count < MAX_SHA_CACHE) {
+		snprintf(cache[*cache_count].path, sizeof(cache[*cache_count].path), "%s", path);
+		strcpy(cache[*cache_count].hex, out_hex);
+		(*cache_count)++;
+	}
 }
 
 static int cmd_list_tiers(const char *profiles_path, const char *out_path) {
@@ -484,10 +747,9 @@ static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, c
 			const char *id = json_str(sc, "id", "");
 			const char *name = json_str(sc, "name", id);
 			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
-			resolve_pak_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
+			int rom_ok = resolve_rom_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
 			resolve_pak_path(pak_dir, json_str(sc, "state", ""), state_path, sizeof(state_path));
 
-			int rom_ok = file_exists(rom_path);
 			int state_ok = !state_path[0] || file_exists(state_path);
 			char display[MAX_STR_LEN + 32];
 			snprintf(display, sizeof(display), "%s %s", (rom_ok && state_ok) ? "[OK]" : "[MISSING]", name);
@@ -500,6 +762,82 @@ static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, c
 	}
 	fprintf(fp, "]\n");
 	fclose(fp);
+	json_free(root);
+	return 0;
+}
+
+static void append_missing_item(char *buf, size_t buf_sz, const char *item) {
+	size_t cur = strlen(buf);
+	if (cur + 2 >= buf_sz) return;
+	if (cur > 0) {
+		snprintf(buf + cur, buf_sz - cur, ",%s", item);
+	}
+	else {
+		snprintf(buf, buf_sz, "%s", item);
+	}
+}
+
+static int cmd_preflight(const char *scenarios_path, const char *pak_dir) {
+	JsonVal *root = json_load_file(scenarios_path);
+	if (!root) {
+		fprintf(stderr, "Failed to load %s\n", scenarios_path);
+		return 1;
+	}
+	JsonVal *scens = json_get(root, "scenarios");
+
+	int roms_found = 0, roms_total = 0;
+	int states_found = 0, states_total = 0;
+	char missing[1024] = {0};
+
+	if (scens && scens->type == JSON_ARR) {
+		for (size_t i = 0; i < scens->count; i++) {
+			JsonVal *sc = scens->items[i];
+			const char *sid = json_str(sc, "id", "");
+			const char *rom_rel = json_str(sc, "rom", "");
+			const char *state_rel = json_str(sc, "state", "");
+
+			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
+			roms_total++;
+			if (resolve_rom_path(pak_dir, rom_rel, rom_path, sizeof(rom_path))) {
+				roms_found++;
+			}
+			else {
+				char tag[MAX_STR_LEN];
+				snprintf(tag, sizeof(tag), "%s:rom", sid);
+				append_missing_item(missing, sizeof(missing), tag);
+			}
+
+			if (state_rel[0]) {
+				states_total++;
+				resolve_pak_path(pak_dir, state_rel, state_path, sizeof(state_path));
+				if (file_exists(state_path)) {
+					states_found++;
+				}
+				else {
+					char tag[MAX_STR_LEN];
+					snprintf(tag, sizeof(tag), "%s:state", sid);
+					append_missing_item(missing, sizeof(missing), tag);
+				}
+			}
+		}
+	}
+
+	char soc_model[256], nextui_ver[128];
+	read_soc_model(soc_model, sizeof(soc_model));
+	read_nextui_version(nextui_ver, sizeof(nextui_ver));
+	int battery_pct = read_battery_pct();
+
+	printf("ROMS_FOUND=%d\n", roms_found);
+	printf("ROMS_TOTAL=%d\n", roms_total);
+	printf("STATES_FOUND=%d\n", states_found);
+	printf("STATES_TOTAL=%d\n", states_total);
+	printf("BATTERY_PCT=%d\n", battery_pct);
+	printf("SOC_MODEL=%s\n", soc_model);
+	printf("NEXTUI_VERSION=%s\n", nextui_ver);
+	if (missing[0]) {
+		printf("MISSING=%s\n", missing);
+	}
+
 	json_free(root);
 	return 0;
 }
@@ -656,10 +994,10 @@ static int cmd_plan(int argc, char **argv) {
 
 			const char *sname = json_str(sc, "name", sid);
 			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
-			resolve_pak_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
+			int rom_ok = resolve_rom_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
 			resolve_pak_path(pak_dir, json_str(sc, "state", ""), state_path, sizeof(state_path));
 
-			if (!file_exists(rom_path) || (state_path[0] && !file_exists(state_path))) {
+			if (!rom_ok || (state_path[0] && !file_exists(state_path))) {
 				skipped_missing++;
 				continue;
 			}
@@ -711,6 +1049,75 @@ static int cmd_plan(int argc, char **argv) {
 	return 0;
 }
 
+typedef struct {
+	char   run_id[MAX_STR_LEN];
+	char   sid[MAX_STR_LEN];
+	char   sname[MAX_STR_LEN];
+	char   pid[MAX_STR_LEN];
+	char   plabel[MAX_STR_LEN];
+	char   core_file[MAX_STR_LEN];
+	char   core_sha[65];
+	char   rom_sha[65];
+	char   state_sha[65];
+	char   renderer[64];
+	char   res[64];
+	char   mode[32];
+	char   status[32];
+	int    target_fps;
+	double vi_fps;
+	double ren_fps;
+	double speed_pct;
+	double ms_avg;
+	double ms_p50;
+	double ms_p95;
+	double ms_p99;
+	double ms_max;
+	double low1;
+	double low01;
+	int    missed;
+	int    underruns;
+	double t0;
+	double t1;
+} AggRun;
+
+static const char *read_env_or(const char *name, const char *fallback) {
+	const char *val = getenv(name);
+	return (val && val[0]) ? val : fallback;
+}
+
+static int read_env_int_or(const char *name, int fallback) {
+	const char *val = getenv(name);
+	if (!val || !val[0]) return fallback;
+	char *end = NULL;
+	long parsed = strtol(val, &end, 10);
+	if (end == val) return fallback;
+	return (int)parsed;
+}
+
+static void read_pak_version(const char *results_dir, char *out, size_t out_sz) {
+	const char *env_ver = getenv("BENCH_PAK_VERSION");
+	if (env_ver && env_ver[0]) {
+		snprintf(out, out_sz, "%s", env_ver);
+		return;
+	}
+	char candidates[2][MAX_PATH_LEN * 2];
+	snprintf(candidates[0], sizeof(candidates[0]), "%s/../../pak.json", results_dir);
+	snprintf(candidates[1], sizeof(candidates[1]), "pak.json");
+	for (int i = 0; i < 2; i++) {
+		JsonVal *pak = json_load_file(candidates[i]);
+		if (pak) {
+			const char *ver = json_str(pak, "version", "");
+			if (ver[0]) {
+				snprintf(out, out_sz, "%s", ver);
+				json_free(pak);
+				return;
+			}
+			json_free(pak);
+		}
+	}
+	snprintf(out, out_sz, "unknown");
+}
+
 /*
  * aggregate <plan.tsv> <results_dir> <platform> <device_name> <out_summary.json> <out_summary.csv> <out_summary.txt>
  */
@@ -730,44 +1137,22 @@ static int cmd_aggregate(int argc, char **argv) {
 	FILE *plan = fopen(plan_path, "r");
 	if (!plan) return 1;
 
-	char gov[64], max_freq[64], kernel[128];
-	read_sysfs_line("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", gov, sizeof(gov), "unknown");
-	read_sysfs_line("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", max_freq, sizeof(max_freq), "0");
-	read_sysfs_line("/proc/sys/kernel/osrelease", kernel, sizeof(kernel), "unknown");
-
-	time_t now = time(NULL);
-	struct tm *tm_info = gmtime(&now);
-	char ts_iso[64];
-	strftime(ts_iso, sizeof(ts_iso), "%Y-%m-%dT%H:%M:%SZ", tm_info);
-
-	FILE *jfp = fopen(out_json, "w");
-	FILE *cfp = fopen(out_csv, "w");
-	FILE *tfp = fopen(out_txt, "w");
-	if (!jfp || !cfp || !tfp) {
-		if (jfp) fclose(jfp);
-		if (cfp) fclose(cfp);
-		if (tfp) fclose(tfp);
+	AggRun *runs = calloc(MAX_RUNS, sizeof(AggRun));
+	ShaCacheEntry *sha_cache = calloc(MAX_SHA_CACHE, sizeof(ShaCacheEntry));
+	if (!runs || !sha_cache) {
+		free(runs);
+		free(sha_cache);
 		fclose(plan);
 		return 1;
 	}
+	int sha_cache_count = 0;
+	int completed = 0;
 
-	fprintf(jfp, "{\n");
-	fprintf(jfp, "  \"schema_version\": 1,\n");
-	fprintf(jfp, "  \"timestamp_utc\": "); json_write_escaped(jfp, ts_iso); fprintf(jfp, ",\n");
-	fprintf(jfp, "  \"platform\": "); json_write_escaped(jfp, platform); fprintf(jfp, ",\n");
-	fprintf(jfp, "  \"device\": "); json_write_escaped(jfp, device_name); fprintf(jfp, ",\n");
-	fprintf(jfp, "  \"cpu_governor\": "); json_write_escaped(jfp, gov); fprintf(jfp, ",\n");
-	fprintf(jfp, "  \"cpu_max_khz\": %s,\n", max_freq[0] ? max_freq : "0");
-	fprintf(jfp, "  \"kernel\": "); json_write_escaped(jfp, kernel); fprintf(jfp, ",\n");
-	fprintf(jfp, "  \"runs\": [\n");
-
-	fprintf(cfp, "platform,device,run_id,scenario_id,scenario_name,profile_id,profile_label,core,core_sha256,renderer,resolution,mode,status,target_game_fps,vi_fps_avg,rendered_fps_avg,speed_pct,frame_ms_avg,frame_ms_p50,frame_ms_p95,frame_ms_p99,frame_ms_max,fps_1pct_low,fps_01pct_low,missed_vsyncs,audio_underruns,soc_temp_start_c,soc_temp_end_c\n");
-	fprintf(tfp, "N64Bench Summary (%s / %s)\n\n", platform, device_name);
+	char gl_renderer[256] = "unknown";
+	char gl_version[256] = "unknown";
 
 	char line[4096];
-	int first = 1;
-	int completed = 0;
-	while (fgets(line, sizeof(line), plan)) {
+	while (fgets(line, sizeof(line), plan) && completed < MAX_RUNS) {
 		size_t ln = strlen(line);
 		while (ln > 0 && (line[ln-1] == '\n' || line[ln-1] == '\r')) line[--ln] = '\0';
 		if (ln == 0) continue;
@@ -794,6 +1179,8 @@ static int cmd_aggregate(int argc, char **argv) {
 		const char *renderer = cols[7];
 		const char *res = cols[8];
 		const char *mode = cols[9];
+		const char *rom_path = cols[10];
+		const char *state_path = cols[11];
 		int target_fps = atoi(cols[14]);
 
 		char run_json_path[MAX_PATH_LEN];
@@ -801,73 +1188,158 @@ static int cmd_aggregate(int argc, char **argv) {
 		JsonVal *r = json_load_file(run_json_path);
 		if (!r) continue;
 
-		char sha[65];
-		sha256_file_hex(core_path, sha);
+		const char *r_gl = json_str(r, "gl_renderer", "");
+		if (strcmp(gl_renderer, "unknown") == 0 && r_gl[0] && strcmp(r_gl, "unknown") != 0) {
+			snprintf(gl_renderer, sizeof(gl_renderer), "%s", r_gl);
+		}
+		const char *v_gl = json_str(r, "gl_version", "");
+		if (strcmp(gl_version, "unknown") == 0 && v_gl[0] && strcmp(v_gl, "unknown") != 0) {
+			snprintf(gl_version, sizeof(gl_version), "%s", v_gl);
+		}
 
-		const char *status = json_str(r, "status", "unknown");
-		double vi_fps = json_num(r, "vi_fps_avg", 0.0);
-		double ren_fps = json_num(r, "rendered_fps_avg", 0.0);
-		double speed_pct = json_num(r, "speed_pct", 0.0);
-		double ms_avg = json_num(r, "frame_ms_avg", 0.0);
-		double ms_p50 = json_num(r, "frame_ms_p50", 0.0);
-		double ms_p95 = json_num(r, "frame_ms_p95", 0.0);
-		double ms_p99 = json_num(r, "frame_ms_p99", 0.0);
-		double ms_max = json_num(r, "frame_ms_max", 0.0);
-		double low1 = json_num(r, "fps_1pct_low", 0.0);
-		double low01 = json_num(r, "fps_01pct_low", 0.0);
-		int missed = (int)json_num(r, "missed_vsyncs", 0);
-		int underruns = (int)json_num(r, "audio_underruns", 0);
-		double t0 = json_num(r, "soc_temp_start_c", -1.0);
-		double t1 = json_num(r, "soc_temp_end_c", -1.0);
+		AggRun *ar = &runs[completed++];
+		snprintf(ar->run_id, sizeof(ar->run_id), "%s", run_id);
+		snprintf(ar->sid, sizeof(ar->sid), "%s", sid);
+		snprintf(ar->sname, sizeof(ar->sname), "%s", sname);
+		snprintf(ar->pid, sizeof(ar->pid), "%s", pid);
+		snprintf(ar->plabel, sizeof(ar->plabel), "%s", plabel);
+		snprintf(ar->core_file, sizeof(ar->core_file), "%s", core_file);
+		snprintf(ar->renderer, sizeof(ar->renderer), "%s", renderer);
+		snprintf(ar->res, sizeof(ar->res), "%s", res);
+		snprintf(ar->mode, sizeof(ar->mode), "%s", mode);
+		snprintf(ar->status, sizeof(ar->status), "%s", json_str(r, "status", "unknown"));
 
-		if (!first) fprintf(jfp, ",\n");
-		first = 0;
+		sha256_cached(sha_cache, &sha_cache_count, core_path, ar->core_sha);
+		sha256_cached(sha_cache, &sha_cache_count, rom_path, ar->rom_sha);
+		sha256_cached(sha_cache, &sha_cache_count, state_path, ar->state_sha);
+
+		ar->target_fps = target_fps;
+		ar->vi_fps = json_num(r, "vi_fps_avg", 0.0);
+		ar->ren_fps = json_num(r, "rendered_fps_avg", 0.0);
+		ar->speed_pct = json_num(r, "speed_pct", 0.0);
+		ar->ms_avg = json_num(r, "frame_ms_avg", 0.0);
+		ar->ms_p50 = json_num(r, "frame_ms_p50", 0.0);
+		ar->ms_p95 = json_num(r, "frame_ms_p95", 0.0);
+		ar->ms_p99 = json_num(r, "frame_ms_p99", 0.0);
+		ar->ms_max = json_num(r, "frame_ms_max", 0.0);
+		ar->low1 = json_num(r, "fps_1pct_low", 0.0);
+		ar->low01 = json_num(r, "fps_01pct_low", 0.0);
+		ar->missed = (int)json_num(r, "missed_vsyncs", 0);
+		ar->underruns = (int)json_num(r, "audio_underruns", 0);
+		ar->t0 = json_num(r, "soc_temp_start_c", -1.0);
+		ar->t1 = json_num(r, "soc_temp_end_c", -1.0);
+
+		json_free(r);
+	}
+	fclose(plan);
+	free(sha_cache);
+
+	char gov[64], max_freq[64], kernel[128], pak_ver[64], nextui_ver[128], soc_model[256];
+	read_sysfs_line("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", gov, sizeof(gov), "unknown");
+	read_sysfs_line("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", max_freq, sizeof(max_freq), "0");
+	read_sysfs_line("/proc/sys/kernel/osrelease", kernel, sizeof(kernel), "unknown");
+	read_pak_version(results_dir, pak_ver, sizeof(pak_ver));
+	read_nextui_version(nextui_ver, sizeof(nextui_ver));
+	read_soc_model(soc_model, sizeof(soc_model));
+
+	const char *suite_scope = read_env_or("BENCH_SCOPE", "unknown");
+	const char *suite_target = read_env_or("BENCH_TARGET", "unknown");
+	const char *mode_selected = read_env_or("BENCH_MODE_SELECTED", "unknown");
+	int bat_start = read_env_int_or("BENCH_BAT_START", -1);
+	int bat_end = read_env_int_or("BENCH_BAT_END", -2);
+	if (bat_end < -1) bat_end = read_battery_pct();
+
+	time_t now = time(NULL);
+	struct tm *tm_info = gmtime(&now);
+	char ts_iso[64];
+	strftime(ts_iso, sizeof(ts_iso), "%Y-%m-%dT%H:%M:%SZ", tm_info);
+
+	FILE *jfp = fopen(out_json, "w");
+	FILE *cfp = fopen(out_csv, "w");
+	FILE *tfp = fopen(out_txt, "w");
+	if (!jfp || !cfp || !tfp) {
+		if (jfp) fclose(jfp);
+		if (cfp) fclose(cfp);
+		if (tfp) fclose(tfp);
+		free(runs);
+		return 1;
+	}
+
+	fprintf(jfp, "{\n");
+	fprintf(jfp, "  \"schema_version\": 2,\n");
+	fprintf(jfp, "  \"timestamp_utc\": "); json_write_escaped(jfp, ts_iso); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"pak_version\": "); json_write_escaped(jfp, pak_ver); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"nextui_version\": "); json_write_escaped(jfp, nextui_ver); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"soc_model\": "); json_write_escaped(jfp, soc_model); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"gl_renderer\": "); json_write_escaped(jfp, gl_renderer); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"gl_version\": "); json_write_escaped(jfp, gl_version); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"platform\": "); json_write_escaped(jfp, platform); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"device\": "); json_write_escaped(jfp, device_name); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"suite_scope\": "); json_write_escaped(jfp, suite_scope); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"suite_target\": "); json_write_escaped(jfp, suite_target); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"mode_selected\": "); json_write_escaped(jfp, mode_selected); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"cpu_governor\": "); json_write_escaped(jfp, gov); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"cpu_max_khz\": %s,\n", max_freq[0] ? max_freq : "0");
+	fprintf(jfp, "  \"kernel\": "); json_write_escaped(jfp, kernel); fprintf(jfp, ",\n");
+	fprintf(jfp, "  \"battery_start_pct\": %d,\n", bat_start);
+	fprintf(jfp, "  \"battery_end_pct\": %d,\n", bat_end);
+	fprintf(jfp, "  \"runs\": [\n");
+
+	fprintf(cfp, "platform,device,run_id,scenario_id,scenario_name,profile_id,profile_label,core,core_sha256,renderer,resolution,mode,status,target_game_fps,vi_fps_avg,rendered_fps_avg,speed_pct,frame_ms_avg,frame_ms_p50,frame_ms_p95,frame_ms_p99,frame_ms_max,fps_1pct_low,fps_01pct_low,missed_vsyncs,audio_underruns,soc_temp_start_c,soc_temp_end_c\n");
+
+	fprintf(tfp, "N64Bench Summary (%s / %s)\n", platform, device_name);
+	fprintf(tfp, "Pak: %s | NextUI: %s | SoC: %s | GL: %s\n\n", pak_ver, nextui_ver, soc_model, gl_renderer);
+
+	for (int i = 0; i < completed; i++) {
+		const AggRun *ar = &runs[i];
+		if (i > 0) fprintf(jfp, ",\n");
 
 		fprintf(jfp, "    {\n");
-		fprintf(jfp, "      \"run_id\": "); json_write_escaped(jfp, run_id); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"scenario_id\": "); json_write_escaped(jfp, sid); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"scenario_name\": "); json_write_escaped(jfp, sname); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"profile_id\": "); json_write_escaped(jfp, pid); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"profile_label\": "); json_write_escaped(jfp, plabel); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"core\": "); json_write_escaped(jfp, core_file); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"core_sha256\": "); json_write_escaped(jfp, sha); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"renderer\": "); json_write_escaped(jfp, renderer); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"resolution\": "); json_write_escaped(jfp, res); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"mode\": "); json_write_escaped(jfp, mode); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"status\": "); json_write_escaped(jfp, status); fprintf(jfp, ",\n");
-		fprintf(jfp, "      \"target_game_fps\": %d,\n", target_fps);
-		fprintf(jfp, "      \"vi_fps_avg\": %.3f,\n", vi_fps);
-		fprintf(jfp, "      \"rendered_fps_avg\": %.3f,\n", ren_fps);
-		fprintf(jfp, "      \"speed_pct\": %.2f,\n", speed_pct);
-		fprintf(jfp, "      \"frame_ms_avg\": %.3f,\n", ms_avg);
-		fprintf(jfp, "      \"frame_ms_p50\": %.3f,\n", ms_p50);
-		fprintf(jfp, "      \"frame_ms_p95\": %.3f,\n", ms_p95);
-		fprintf(jfp, "      \"frame_ms_p99\": %.3f,\n", ms_p99);
-		fprintf(jfp, "      \"frame_ms_max\": %.3f,\n", ms_max);
-		fprintf(jfp, "      \"fps_1pct_low\": %.3f,\n", low1);
-		fprintf(jfp, "      \"fps_01pct_low\": %.3f,\n", low01);
-		fprintf(jfp, "      \"missed_vsyncs\": %d,\n", missed);
-		fprintf(jfp, "      \"audio_underruns\": %d,\n", underruns);
-		fprintf(jfp, "      \"soc_temp_start_c\": %.2f,\n", t0);
-		fprintf(jfp, "      \"soc_temp_end_c\": %.2f,\n", t1);
-		fprintf(jfp, "      \"frames_csv\": \"frames/%s.csv\"\n", run_id);
+		fprintf(jfp, "      \"run_id\": "); json_write_escaped(jfp, ar->run_id); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"scenario_id\": "); json_write_escaped(jfp, ar->sid); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"scenario_name\": "); json_write_escaped(jfp, ar->sname); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"profile_id\": "); json_write_escaped(jfp, ar->pid); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"profile_label\": "); json_write_escaped(jfp, ar->plabel); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"core\": "); json_write_escaped(jfp, ar->core_file); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"core_sha256\": "); json_write_escaped(jfp, ar->core_sha); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"rom_sha256\": "); json_write_escaped(jfp, ar->rom_sha); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"state_sha256\": "); json_write_escaped(jfp, ar->state_sha); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"renderer\": "); json_write_escaped(jfp, ar->renderer); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"resolution\": "); json_write_escaped(jfp, ar->res); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"mode\": "); json_write_escaped(jfp, ar->mode); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"status\": "); json_write_escaped(jfp, ar->status); fprintf(jfp, ",\n");
+		fprintf(jfp, "      \"target_game_fps\": %d,\n", ar->target_fps);
+		fprintf(jfp, "      \"vi_fps_avg\": %.3f,\n", ar->vi_fps);
+		fprintf(jfp, "      \"rendered_fps_avg\": %.3f,\n", ar->ren_fps);
+		fprintf(jfp, "      \"speed_pct\": %.2f,\n", ar->speed_pct);
+		fprintf(jfp, "      \"frame_ms_avg\": %.3f,\n", ar->ms_avg);
+		fprintf(jfp, "      \"frame_ms_p50\": %.3f,\n", ar->ms_p50);
+		fprintf(jfp, "      \"frame_ms_p95\": %.3f,\n", ar->ms_p95);
+		fprintf(jfp, "      \"frame_ms_p99\": %.3f,\n", ar->ms_p99);
+		fprintf(jfp, "      \"frame_ms_max\": %.3f,\n", ar->ms_max);
+		fprintf(jfp, "      \"fps_1pct_low\": %.3f,\n", ar->low1);
+		fprintf(jfp, "      \"fps_01pct_low\": %.3f,\n", ar->low01);
+		fprintf(jfp, "      \"missed_vsyncs\": %d,\n", ar->missed);
+		fprintf(jfp, "      \"audio_underruns\": %d,\n", ar->underruns);
+		fprintf(jfp, "      \"soc_temp_start_c\": %.2f,\n", ar->t0);
+		fprintf(jfp, "      \"soc_temp_end_c\": %.2f,\n", ar->t1);
+		fprintf(jfp, "      \"frames_csv\": \"frames/%s.csv\"\n", ar->run_id);
 		fprintf(jfp, "    }");
 
 		fprintf(cfp, "%s,%s,%s,%s,\"%s\",%s,\"%s\",%s,%s,%s,%s,%s,%s,%d,%.3f,%.3f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%.2f,%.2f\n",
-			platform, device_name, run_id, sid, sname, pid, plabel, core_file, sha, renderer, res, mode, status,
-			target_fps, vi_fps, ren_fps, speed_pct, ms_avg, ms_p50, ms_p95, ms_p99, ms_max, low1, low01, missed, underruns, t0, t1);
+			platform, device_name, ar->run_id, ar->sid, ar->sname, ar->pid, ar->plabel, ar->core_file, ar->core_sha,
+			ar->renderer, ar->res, ar->mode, ar->status, ar->target_fps, ar->vi_fps, ar->ren_fps, ar->speed_pct,
+			ar->ms_avg, ar->ms_p50, ar->ms_p95, ar->ms_p99, ar->ms_max, ar->low1, ar->low01, ar->missed, ar->underruns,
+			ar->t0, ar->t1);
 
-		if (strcmp(mode, "uncapped") == 0) {
+		if (strcmp(ar->mode, "uncapped") == 0) {
 			fprintf(tfp, "%s [%s] UNCAPPED: %.1f VI/s (%.0f%% speed) | 3D: %.1f fps\n",
-				sid, plabel, vi_fps, speed_pct, ren_fps);
+				ar->sid, ar->plabel, ar->vi_fps, ar->speed_pct, ar->ren_fps);
 		}
 		else {
 			fprintf(tfp, "%s [%s] PACED: %.1f VI/s (1%% low %.1f) | 3D: %.1f fps | miss:%d\n",
-				sid, plabel, vi_fps, low1, ren_fps, missed);
+				ar->sid, ar->plabel, ar->vi_fps, ar->low1, ar->ren_fps, ar->missed);
 		}
-
-		json_free(r);
-		completed++;
 	}
 
 	fprintf(jfp, "\n  ]\n}\n");
@@ -878,14 +1350,14 @@ static int cmd_aggregate(int argc, char **argv) {
 	fclose(jfp);
 	fclose(cfp);
 	fclose(tfp);
-	fclose(plan);
+	free(runs);
 	printf("AGGREGATED=%d\n", completed);
 	return 0;
 }
 
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		fprintf(stderr, "Usage: benchctl <list-tiers|list-profiles|list-scenarios|plan|aggregate> ...\n");
+		fprintf(stderr, "Usage: benchctl <list-tiers|list-profiles|list-scenarios|preflight|plan|aggregate> ...\n");
 		return 1;
 	}
 	if (strcmp(argv[1], "list-tiers") == 0 && argc >= 4)
@@ -894,6 +1366,8 @@ int main(int argc, char **argv) {
 		return cmd_list_profiles(argv[2], argv[3]);
 	if (strcmp(argv[1], "list-scenarios") == 0 && argc >= 5)
 		return cmd_list_scenarios(argv[2], argv[3], argv[4]);
+	if (strcmp(argv[1], "preflight") == 0 && argc >= 4)
+		return cmd_preflight(argv[2], argv[3]);
 	if (strcmp(argv[1], "plan") == 0)
 		return cmd_plan(argc, argv);
 	if (strcmp(argv[1], "aggregate") == 0)

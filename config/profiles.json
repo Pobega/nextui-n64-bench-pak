@@ -7,6 +7,23 @@
   },
   "tiers": [
     {
+      "id": "community-standard",
+      "name": "Community Standard (10 Profiles, 240p+480p)",
+      "description": "Standardized comparison of ReARMed and ParaLLEl-N64 across all renderers at 320x240 and 640x480 (recommended for submissions).",
+      "profiles": [
+        "rearmed-gles2n64-240p",
+        "rearmed-rice-240p",
+        "rearmed-glide64-240p",
+        "parallel-rice-240p",
+        "parallel-glide64-240p",
+        "rearmed-gles2n64-480p",
+        "rearmed-rice-480p",
+        "rearmed-glide64-480p",
+        "parallel-rice-480p",
+        "parallel-glide64-480p"
+      ]
+    },
+    {
       "id": "quick-240p",
       "name": "Quick 320x240 (5 Profiles)",
       "description": "Compare ReARMed (gles2n64, Rice, Glide64) vs ParaLLEl-N64 (Rice, Glide64) at native 320x240.",
