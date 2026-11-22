@@ -170,6 +170,7 @@ package:
 	@cp pak.json launch.sh LICENSE README.md $(BUILD_DIR)/staging/$(PAK_NAME).pak/
 	@chmod 0755 $(BUILD_DIR)/staging/$(PAK_NAME).pak/launch.sh
 	@cp config/*.json $(BUILD_DIR)/staging/$(PAK_NAME).pak/config/
+	@for f in config/*.cfg; do [ -f "$$f" ] && cp "$$f" $(BUILD_DIR)/staging/$(PAK_NAME).pak/config/; done || true
 	@cp roms/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/roms/
 	@cp states/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/states/
 	@cp inputs/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/inputs/
@@ -185,6 +186,7 @@ package:
 		cp pak.json launch.sh LICENSE README.md $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/; \
 		chmod 0755 $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/launch.sh; \
 		cp config/*.json $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/config/; \
+		for f in config/*.cfg; do [ -f "$$f" ] && cp "$$f" $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/config/; done || true; \
 		cp inputs/.gitkeep $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/inputs/; \
 		for f in inputs/*.inp; do [ -f "$$f" ] && cp "$$f" $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/inputs/; done || true; \
 		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p/; \

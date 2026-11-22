@@ -37,6 +37,45 @@ PLAN_TSV="$WORK_DIR/plan.tsv"
 TAB="$(printf '\t')"
 MODE="both"
 DEV_TAG="${DEVICE:-$PLATFORM}"
+
+default_dpad_analog() {
+	dev_lc="$(printf '%s' "$DEVICE" | tr '[:upper:]' '[:lower:]')"
+	case "$dev_lc" in
+		brick|rgsp|rg35xxsp|rg35xxplus|rg35xx|rg28xx)
+			printf 'on\n'
+			;;
+		smartpro|smartpros|rg35xxh|rg40xxh|rg40xxv|rgcubexx)
+			printf 'off\n'
+			;;
+		"")
+			case "$PLATFORM" in
+				h700|tg5040) printf 'on\n' ;;
+				*)           printf 'off\n' ;;
+			esac
+			;;
+		*)
+			printf 'off\n'
+			;;
+	esac
+}
+
+dpad_analog_flag() {
+	if [ "$DPAD_ANALOG" = "on" ]; then
+		printf '1\n'
+	else
+		printf '0\n'
+	fi
+}
+
+toggle_dpad_analog() {
+	if [ "$DPAD_ANALOG" = "on" ]; then
+		DPAD_ANALOG="off"
+	else
+		DPAD_ANALOG="on"
+	fi
+}
+
+DPAD_ANALOG="$(default_dpad_analog)"
 PAK_VERSION="unknown"
 if [ -f "$PAK_JSON" ]; then
 	parsed_ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PAK_JSON" | head -n 1)"
@@ -359,7 +398,7 @@ record_scenario() {
 
 	mkdir -p "$PAK_DIR/inputs"
 
-	REC_PROMPT="Record inputs for ${REC_NAME:-$SEL_ID}\n\n1. Wait through the 2s warmup\n2. Play normally for 30s\n3. Hold MENU anytime after 1s to stop & save early\n\nSaves to: inputs/${SEL_ID}.inp"
+	REC_PROMPT="Record inputs for ${REC_NAME:-$SEL_ID}\nD-Pad -> Analog: $DPAD_ANALOG\n\n1. Wait through the 2s warmup\n2. Play normally for 30s\n3. Hold MENU anytime after 1s to stop & save early\n\nSaves to: inputs/${SEL_ID}.inp"
 	if ! confirm_msg "$REC_PROMPT"; then
 		return 0
 	fi
@@ -367,6 +406,7 @@ record_scenario() {
 	BENCH_ENABLE=1 \
 	BENCH_TAG="N64" \
 	BENCH_MODE="record" \
+	BENCH_DPAD_TO_ANALOG="$(dpad_analog_flag)" \
 	BENCH_CFG_PATH="$REC_CFG" \
 	BENCH_STATE_PATH="$REC_STATE" \
 	BENCH_WARMUP_FRAMES="${REC_WARMUP:-120}" \
@@ -388,6 +428,38 @@ record_scenario() {
 	fi
 }
 
+configure_record_controls() {
+	REC_INFO="$("$BENCHCTL" record-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "auto" "$WORK_DIR" 2>"$WORK_DIR/record.err")"
+	if [ $? -ne 0 ] || [ -z "$REC_INFO" ]; then
+		ERR_MSG="$(cat "$WORK_DIR/record.err" 2>/dev/null)"
+		show_msg "Cannot open control setup:\n\n${ERR_MSG:-No runnable N64 scenario found (need at least 1 ROM + savestate).}"
+		return 1
+	fi
+
+	REC_NAME="$(preflight_field "$REC_INFO" "SCENARIO_NAME")"
+	REC_ROM="$(preflight_field "$REC_INFO" "ROM_PATH")"
+	REC_STATE="$(preflight_field "$REC_INFO" "STATE_PATH")"
+	REC_CORE="$(preflight_field "$REC_INFO" "CORE_PATH")"
+	CONTROLS_CFG="$(preflight_field "$REC_INFO" "CONTROLS_CFG")"
+	[ -n "$CONTROLS_CFG" ] || CONTROLS_CFG="$PAK_DIR/config/record_controls.cfg"
+
+	mkdir -p "$PAK_DIR/config"
+
+	CFG_PROMPT="Configure Record Controls\nTest game: ${REC_NAME:-N64}\nD-Pad -> Analog: $DPAD_ANALOG\n\n1. Press MENU -> Controls to remap & test live\n2. Select Save (for console or game) to update config/record_controls.cfg\n3. Select Quit when done"
+	if ! confirm_msg "$CFG_PROMPT"; then
+		return 0
+	fi
+
+	BENCH_ENABLE=1 \
+	BENCH_TAG="N64" \
+	BENCH_MODE="config" \
+	BENCH_DPAD_TO_ANALOG="$(dpad_analog_flag)" \
+	BENCH_CFG_PATH="$CONTROLS_CFG" \
+	BENCH_STATE_PATH="$REC_STATE" \
+	BENCH_LABEL="Configure Controls" \
+	"$MINARCH_BENCH" "$REC_CORE" "$REC_ROM"
+}
+
 cycle_mode() {
 	case "$MODE" in
 		both)     MODE="paced" ;;
@@ -399,7 +471,7 @@ cycle_mode() {
 
 while true; do
 	cat > "$MENU_JSON" <<EOF
-["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Record Scenario Inputs","Mode: $MODE","Check Setup / Preflight","Bundle Last Result","View Last Summary","Exit"]
+["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Record Scenario Inputs","Configure Record Controls","Record D-Pad -> Analog: $DPAD_ANALOG","Mode: $MODE","Check Setup / Preflight","Bundle Last Result","View Last Summary","Exit"]
 EOF
 	rm -f "$CHOICE_OUT"
 	minui-list --disable-auto-sleep --file "$MENU_JSON" --format json --title "N64 Benchmark ($PLATFORM)" --confirm-text "SELECT" --write-location "$CHOICE_OUT" >/dev/null
@@ -424,6 +496,12 @@ EOF
 			;;
 		"Record Scenario Inputs")
 			record_scenario
+			;;
+		"Configure Record Controls")
+			configure_record_controls
+			;;
+		"Record D-Pad -> Analog: "*)
+			toggle_dpad_analog
 			;;
 		"Mode: "*)
 			cycle_mode

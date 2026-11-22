@@ -47,10 +47,10 @@ index a8f66e76..c69485b5 100644
  		if (use_core_fps || fast_forward) {
 diff --git a/workspace/all/minarch/ma_bench.c b/workspace/all/minarch/ma_bench.c
 new file mode 100644
-index 00000000..984e1a6f
+index 00000000..cc5e2374
 --- /dev/null
 +++ b/workspace/all/minarch/ma_bench.c
-@@ -0,0 +1,820 @@
+@@ -0,0 +1,865 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -69,6 +69,7 @@ index 00000000..984e1a6f
 +#define BENCH_DEFAULT_UNCAPPED_SEC 8
 +#define BENCH_DEFAULT_RECORD_SEC   30
 +#define BENCH_MIN_RECORD_FRAMES    60
++#define BENCH_CONFIG_HUD_SEC       6.0
 +#define BENCH_HUD_INTERVAL_MS      250
 +#define BENCH_UNCAPPED_FLIP_MS     500
 +#define BENCH_ABORT_HOLD_MS        800
@@ -103,6 +104,9 @@ index 00000000..984e1a6f
 +	int active;
 +	int uncapped;
 +	int recording;
++	int config_mode;
++	int dpad_to_analog;
++	int config_hud_cleared;
 +	int aborted;
 +	int state_failed;
 +
@@ -295,6 +299,17 @@ index 00000000..984e1a6f
 +	if (bench.last_hud_ms != 0 && (now_ms - bench.last_hud_ms) < BENCH_HUD_INTERVAL_MS) return;
 +	bench.last_hud_ms = now_ms;
 +
++	if (bench.config_mode && bench.phase == BENCH_PHASE_RECORD) {
++		double elapsed_s = (double)(getMicroseconds() - bench.record_start_us) / 1e6;
++		if (elapsed_s >= BENCH_CONFIG_HUD_SEC) {
++			if (!bench.config_hud_cleared) {
++				PLAT_clearNotificationSurface();
++				bench.config_hud_cleared = 1;
++			}
++			return;
++		}
++	}
++
 +	int sw = screen->w > 0 ? screen->w : 640;
 +	int bar_h = SCALE1(36);
 +	if (bar_h < 44) bar_h = 44;
@@ -310,11 +325,11 @@ index 00000000..984e1a6f
 +	double progress = 0.0;
 +	char line1[256];
 +	char line2[256];
-+	const char *mode_tag = bench.recording ? "REC" : (bench.uncapped ? "UNCAPPED" : "PACED");
++	const char *mode_tag = bench.config_mode ? "CONFIG" : (bench.recording ? "REC" : (bench.uncapped ? "UNCAPPED" : "PACED"));
 +
 +	if (bench.phase == BENCH_PHASE_BOOT) {
 +		snprintf(line1, sizeof(line1), "[%s] %s", mode_tag, bench.label ? bench.label : "N64 Benchmark");
-+		snprintf(line2, sizeof(line2), "Initializing core & loading savestate... (hold MENU to cancel)");
++		snprintf(line2, sizeof(line2), "Initializing core & loading savestate...");
 +	}
 +	else if (bench.phase == BENCH_PHASE_WARMUP) {
 +		progress = bench.warmup_frames > 0 ? (double)bench.phase_frames / (double)bench.warmup_frames : 1.0;
@@ -337,7 +352,13 @@ index 00000000..984e1a6f
 +		if (progress > 1.0) progress = 1.0;
 +
 +		snprintf(line1, sizeof(line1), "[%s] %s", mode_tag, bench.label ? bench.label : "N64 Benchmark");
-+		if (bench.recording) {
++		if (bench.config_mode) {
++			progress = 1.0 - (elapsed_s / BENCH_CONFIG_HUD_SEC);
++			if (progress < 0.0) progress = 0.0;
++			snprintf(line2, sizeof(line2),
++				"CONFIG CONTROLS — Press MENU > Controls to remap & save, then Quit");
++		}
++		else if (bench.recording) {
 +			snprintf(line2, sizeof(line2),
 +				"REC %.0fs/%.0fs | %uf | Hold MENU to save",
 +				elapsed_s, bench.duration_sec, bench.script_frame);
@@ -578,8 +599,11 @@ index 00000000..984e1a6f
 +
 +	bench.active = 1;
 +	const char *mode = getenv("BENCH_MODE");
-+	bench.recording = (mode && strcmp(mode, "record") == 0) ? 1 : 0;
-+	bench.uncapped = (!bench.recording && mode && strcmp(mode, "uncapped") == 0) ? 1 : 0;
++	bench.config_mode = (mode && strcmp(mode, "config") == 0) ? 1 : 0;
++	bench.recording = (!bench.config_mode && mode && strcmp(mode, "record") == 0) ? 1 : 0;
++	bench.uncapped = (!bench.config_mode && !bench.recording && mode && strcmp(mode, "uncapped") == 0) ? 1 : 0;
++	const char *d2a = getenv("BENCH_DPAD_TO_ANALOG");
++	bench.dpad_to_analog = (d2a && strcmp(d2a, "1") == 0) ? 1 : 0;
 +
 +	bench.cfg_path = getenv("BENCH_CFG_PATH");
 +	bench.state_path = getenv("BENCH_STATE_PATH");
@@ -600,7 +624,7 @@ index 00000000..984e1a6f
 +	snprintf(bench.gl_renderer, sizeof(bench.gl_renderer), "unknown");
 +	snprintf(bench.gl_version, sizeof(bench.gl_version), "unknown");
 +
-+	if (!bench.recording) {
++	if (!bench.recording && !bench.config_mode) {
 +		bench_load_inputs(bench.input_path);
 +	}
 +
@@ -608,8 +632,9 @@ index 00000000..984e1a6f
 +		fast_forward = 1;
 +	}
 +
-+	LOG_info("Bench initialized: mode=%s warmup=%u duration=%.0fs state=%s\n",
-+		bench.recording ? "record" : (bench.uncapped ? "uncapped" : "paced"),
++	LOG_info("Bench initialized: mode=%s dpad_to_analog=%d warmup=%u duration=%.0fs state=%s\n",
++		bench.config_mode ? "config" : (bench.recording ? "record" : (bench.uncapped ? "uncapped" : "paced")),
++		bench.dpad_to_analog,
 +		bench.warmup_frames, bench.duration_sec,
 +		bench.state_path ? bench.state_path : "(none)");
 +}
@@ -626,6 +651,14 @@ index 00000000..984e1a6f
 +	return bench.active && bench.recording;
 +}
 +
++int Bench_isConfigMode(void) {
++	return bench.active && bench.config_mode;
++}
++
++int Bench_isDpadToAnalog(void) {
++	return bench.active && bench.dpad_to_analog;
++}
++
 +const char *Bench_getConfigPath(void) {
 +	return (bench.active && bench.cfg_path && bench.cfg_path[0]) ? bench.cfg_path : NULL;
 +}
@@ -633,6 +666,7 @@ index 00000000..984e1a6f
 +int Bench_getExitCode(void) {
 +	if (!bench.active) return BENCH_EXIT_OK;
 +	if (bench.state_failed) return BENCH_EXIT_STATE_FAIL;
++	if (bench.config_mode) return BENCH_EXIT_OK;
 +	if (bench.recording) {
 +		return (bench.script_frame >= BENCH_MIN_RECORD_FRAMES) ? BENCH_EXIT_OK : BENCH_EXIT_ABORTED;
 +	}
@@ -676,7 +710,7 @@ index 00000000..984e1a6f
 +}
 +
 +void Bench_onAudioBatch(void) {
-+	if (!bench.active || bench.uncapped || bench.recording || bench.phase != BENCH_PHASE_RECORD) return;
++	if (!bench.active || bench.uncapped || bench.recording || bench.config_mode || bench.phase != BENCH_PHASE_RECORD) return;
 +	if (perf.buffer_size > 0 && perf.buffer_free >= perf.buffer_size - 64) {
 +		bench.audio_underruns++;
 +	}
@@ -701,7 +735,13 @@ index 00000000..984e1a6f
 +				}
 +				LOG_info("Bench: loaded savestate %s\n", bench.state_path);
 +			}
-+			bench.phase = BENCH_PHASE_WARMUP;
++			if (bench.config_mode) {
++				bench.phase = BENCH_PHASE_RECORD;
++				bench.record_start_us = getMicroseconds();
++			}
++			else {
++				bench.phase = BENCH_PHASE_WARMUP;
++			}
 +			bench.phase_frames = 0;
 +			bench.script_frame = 0;
 +			bench.last_hud_ms = 0;
@@ -719,6 +759,11 @@ index 00000000..984e1a6f
 +		}
 +	}
 +	else if (bench.phase == BENCH_PHASE_RECORD) {
++		if (bench.config_mode) {
++			bench_render_hud();
++			return;
++		}
++
 +		bench.vi_frames++;
 +		if (bench.recording) {
 +			bench_record_frame_input(bench.script_frame);
@@ -771,7 +816,7 @@ index 00000000..984e1a6f
 +
 +int Bench_getScriptedInput(unsigned port, unsigned device, unsigned index, unsigned id, int16_t *out_value) {
 +	if (!bench.active || !out_value) return 0;
-+	if (bench.recording && bench.phase == BENCH_PHASE_RECORD) {
++	if ((bench.recording || bench.config_mode) && bench.phase == BENCH_PHASE_RECORD) {
 +		return 0;
 +	}
 +	if (port != 0) {
@@ -785,7 +830,7 @@ index 00000000..984e1a6f
 +	int16_t rx = 0;
 +	int16_t ry = 0;
 +
-+	if (!bench.recording && bench.phase == BENCH_PHASE_RECORD) {
++	if (!bench.recording && !bench.config_mode && bench.phase == BENCH_PHASE_RECORD) {
 +		for (size_t i = 0; i < bench.input_count; i++) {
 +			const BenchInputStep *step = &bench.inputs[i];
 +			if (bench.script_frame >= step->start_frame && bench.script_frame < step->end_frame) {
@@ -817,7 +862,7 @@ index 00000000..984e1a6f
 +}
 +
 +int Bench_checkAbortInput(void) {
-+	if (!bench.active) return 0;
++	if (!bench.active || bench.config_mode) return 0;
 +	if (PAD_isPressed(BTN_MENU)) {
 +		uint32_t now_ms = SDL_GetTicks();
 +		if (bench.menu_hold_start_ms == 0) {
@@ -849,7 +894,7 @@ index 00000000..984e1a6f
 +	if (bench.recording) {
 +		bench_write_recording();
 +	}
-+	else {
++	else if (!bench.config_mode) {
 +		bench_write_outputs();
 +	}
 +
@@ -873,10 +918,10 @@ index 00000000..984e1a6f
 +}
 diff --git a/workspace/all/minarch/ma_bench.h b/workspace/all/minarch/ma_bench.h
 new file mode 100644
-index 00000000..552908fa
+index 00000000..995ba86c
 --- /dev/null
 +++ b/workspace/all/minarch/ma_bench.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,29 @@
 +#pragma once
 +
 +#include <stdint.h>
@@ -890,6 +935,8 @@ index 00000000..552908fa
 +int  Bench_isActive(void);
 +int  Bench_isUncapped(void);
 +int  Bench_isRecording(void);
++int  Bench_isConfigMode(void);
++int  Bench_isDpadToAnalog(void);
 +const char *Bench_getConfigPath(void);
 +int  Bench_getExitCode(void);
 +
@@ -905,7 +952,7 @@ index 00000000..552908fa
 +
 +void Bench_finish(void);
 diff --git a/workspace/all/minarch/ma_config.c b/workspace/all/minarch/ma_config.c
-index 8dce3c9a..229ec675 100644
+index 8dce3c9a..1ac51e41 100644
 --- a/workspace/all/minarch/ma_config.c
 +++ b/workspace/all/minarch/ma_config.c
 @@ -7,6 +7,7 @@
@@ -916,7 +963,19 @@ index 8dce3c9a..229ec675 100644
  
  static ButtonMapping button_label_mapping[] = { // used to lookup the retro_id and local btn_id from button name
  	{"NONE",	-1,								BTN_ID_NONE},
-@@ -566,6 +567,16 @@ void Config_load(void) {
+@@ -298,6 +299,11 @@ char** list_files_in_folder(const char* folderPath, int* fileCount, const char*
+ 
+ // CONFIG_WRITE_ALL, CONFIG_WRITE_GAME defined in minarch_internal.h
+ static void Config_getPath(char* filename, int override) {
++	if (Bench_isConfigMode() && Bench_getConfigPath()) {
++		snprintf(filename, MAX_PATH, "%s", Bench_getConfigPath());
++		LOG_info("Config_getPath (bench config) %s\n", filename);
++		return;
++	}
+ 	char device_tag[64] = {0};
+ 	if (config.device_tag) sprintf(device_tag,"-%s",config.device_tag);
+ 	if (override) sprintf(filename, "%s/%s%s.cfg", core.config_dir, game.alt_name, device_tag);
+@@ -566,6 +572,16 @@ void Config_load(void) {
  	
  	char path[MAX_PATH];
  	config.loaded = CONFIG_NONE;
@@ -933,6 +992,15 @@ index 8dce3c9a..229ec675 100644
  	int override = 0;
  	Config_getPath(path, CONFIG_WRITE_GAME);
  	if (exists(path)) override = 1; 
+@@ -598,7 +614,7 @@ void Config_write(int override) {
+ 	Config_getPath(path, CONFIG_WRITE_GAME);
+ 	
+ 	if (!override) {
+-		if (config.loaded==CONFIG_GAME) unlink(path);
++		if (config.loaded==CONFIG_GAME && !Bench_isConfigMode()) unlink(path);
+ 		Config_getPath(path, CONFIG_WRITE_ALL);
+ 	}
+ 	config.loaded = override ? CONFIG_GAME : CONFIG_CONSOLE;
 diff --git a/workspace/all/minarch/ma_core.c b/workspace/all/minarch/ma_core.c
 index a7f77993..c231a751 100644
 --- a/workspace/all/minarch/ma_core.c
@@ -962,7 +1030,7 @@ index a7f77993..c231a751 100644
  		core.unload_game();
  		HWR_contextDestroy();
 diff --git a/workspace/all/minarch/ma_input.c b/workspace/all/minarch/ma_input.c
-index 3233b214..476282e8 100644
+index 3233b214..2501c26c 100644
 --- a/workspace/all/minarch/ma_input.c
 +++ b/workspace/all/minarch/ma_input.c
 @@ -1,5 +1,6 @@
@@ -972,21 +1040,52 @@ index 3233b214..476282e8 100644
  
  #include <string.h>
  
-@@ -17,166 +18,175 @@ static int ignore_menu = 0;
- void input_poll_callback(void) {
- 	PAD_poll();
+@@ -14,169 +15,214 @@ int setFastForward(int enable) {
+ 
+ static uint32_t buttons = 0; // RETRO_DEVICE_ID_JOYPAD_* buttons
+ static int ignore_menu = 0;
+-void input_poll_callback(void) {
+-	PAD_poll();
  
 -	int show_setting = 0;
 -	PWR_update(NULL, &show_setting, Menu_beforeSleep, Menu_afterSleep);
--
++#define BENCH_DPAD_ANALOG_FULL 32767
++#define BENCH_DPAD_ANALOG_DIAG 23170
++
++static uint32_t bench_live_buttons = 0;
++static int16_t  bench_live_lx = 0;
++static int16_t  bench_live_ly = 0;
++
++static void bench_apply_dpad_to_analog(
++	uint32_t raw_buttons, int16_t raw_lx, int16_t raw_ly,
++	uint32_t *out_buttons, int16_t *out_lx, int16_t *out_ly)
++{
++	int dx = 0;
++	int dy = 0;
++	if (raw_buttons & (1u << RETRO_DEVICE_ID_JOYPAD_LEFT))  dx -= 1;
++	if (raw_buttons & (1u << RETRO_DEVICE_ID_JOYPAD_RIGHT)) dx += 1;
++	if (raw_buttons & (1u << RETRO_DEVICE_ID_JOYPAD_UP))    dy -= 1;
++	if (raw_buttons & (1u << RETRO_DEVICE_ID_JOYPAD_DOWN))  dy += 1;
++
++	uint32_t dpad_mask = (1u << RETRO_DEVICE_ID_JOYPAD_LEFT)
++	                   | (1u << RETRO_DEVICE_ID_JOYPAD_RIGHT)
++	                   | (1u << RETRO_DEVICE_ID_JOYPAD_UP)
++	                   | (1u << RETRO_DEVICE_ID_JOYPAD_DOWN);
++	*out_buttons = raw_buttons & ~dpad_mask;
+ 
 -	// I _think_ this can stay as is...
 -	if (PAD_justPressed(BTN_MENU)) {
 -		ignore_menu = 0;
--	}
++	if (dx != 0 || dy != 0) {
++		int16_t mag = (dx != 0 && dy != 0) ? BENCH_DPAD_ANALOG_DIAG : BENCH_DPAD_ANALOG_FULL;
++		*out_lx = (int16_t)(dx * mag);
++		*out_ly = (int16_t)(dy * mag);
+ 	}
 -	if (PAD_isPressed(BTN_MENU) && (PAD_isPressed(BTN_PLUS) || PAD_isPressed(BTN_MINUS))) {
 -		ignore_menu = 1;
-+	if (Bench_checkAbortInput()) {
-+		return;
++	else {
++		*out_lx = raw_lx;
++		*out_ly = raw_ly;
  	}
 -	if (PAD_isPressed(BTN_MENU) && PAD_isPressed(BTN_SELECT)) {
 -		ignore_menu = 1;
@@ -995,13 +1094,22 @@ index 3233b214..476282e8 100644
 -		Menu_saveState();
 -		putFile(GAME_SWITCHER_PERSIST_PATH, game.path + strlen(SDCARD_PATH));
 -		GFX_clear(screen);
++}
++
++void input_poll_callback(void) {
++	PAD_poll();
  
--	}
++	if (Bench_checkAbortInput()) {
++		return;
+ 	}
+ 
+-	if (PAD_justPressed(BTN_POWER)) {
 +	if (!Bench_isRecording()) {
 +		int show_setting = 0;
 +		PWR_update(NULL, &show_setting, Menu_beforeSleep, Menu_afterSleep);
  
--	if (PAD_justPressed(BTN_POWER)) {
+-	}
+-	else if (PAD_justReleased(BTN_POWER)) {
 +		// I _think_ this can stay as is...
 +		if (PAD_justPressed(BTN_MENU)) {
 +			ignore_menu = 0;
@@ -1018,11 +1126,7 @@ index 3233b214..476282e8 100644
 +			GFX_clear(screen);
  
 -	}
--	else if (PAD_justReleased(BTN_POWER)) {
 +		}
- 
--	}
-+		if (PAD_justPressed(BTN_POWER)) {
  
 -	static int toggled_ff_on = 0; // this logic only works because TOGGLE_FF is before HOLD_FF in the menu...
 -	rewind_pressed = 0;
@@ -1042,6 +1146,8 @@ index 3233b214..476282e8 100644
 -						rewind_pressed = 0;
 -						Rewind_sync_encode_state();
 -						rewinding = 0;
++		if (PAD_justPressed(BTN_POWER)) {
++
 +		}
 +		else if (PAD_justReleased(BTN_POWER)) {
 +
@@ -1165,17 +1271,21 @@ index 3233b214..476282e8 100644
 +						if (ff_toggled) fast_forward = setFastForward(1);
  					}
 -					break;
-+					if (mapping->mod && rewind_pressed) ignore_menu = 1;
- 				}
+-				}
 -				else if (PAD_justReleased(btn)) {
 -					break;
--				}
++					if (mapping->mod && rewind_pressed) ignore_menu = 1;
+ 				}
 -			}
 -			else if (PAD_justPressed(btn)) {
 -				switch (i) {
 -					case SHORTCUT_SAVE_STATE:
 -						newScreenshot = 1;
 -						Menu_saveState();
+-						break;
+-					case SHORTCUT_LOAD_STATE: Menu_loadState(); break;
+-					case SHORTCUT_SCREENSHOT:
+-						Menu_screenshot();
 +				else if (i==SHORTCUT_TOGGLE_REWIND) {
 +					if (PAD_justPressed(btn)) {
 +						rewind_toggle = !rewind_toggle;
@@ -1187,10 +1297,6 @@ index 3233b214..476282e8 100644
 +						}
 +						if (mapping->mod) ignore_menu = 1;
  						break;
--					case SHORTCUT_LOAD_STATE: Menu_loadState(); break;
--					case SHORTCUT_SCREENSHOT:
--						Menu_screenshot();
--						break;
 -					case SHORTCUT_RESET_GAME: core.reset(); break;
 -					case SHORTCUT_SAVE_QUIT:
 -						newScreenshot = 1;
@@ -1286,7 +1392,7 @@ index 3233b214..476282e8 100644
  	}
  
  	// Block buttons used in MENU+button shortcuts until they are physically released.
-@@ -187,7 +197,7 @@ void input_poll_callback(void) {
+@@ -187,7 +233,7 @@ void input_poll_callback(void) {
  			if (!PAD_isPressed(1 << i)) consumed_mask &= ~(1 << i);
  		}
  	}
@@ -1295,12 +1401,22 @@ index 3233b214..476282e8 100644
  		for (int i = 0; i < SHORTCUT_COUNT; i++) {
  			ButtonMapping *mapping = &config.shortcuts[i];
  			if (!mapping->mod || mapping->local < 0 || mapping->local >= LOCAL_BUTTON_COUNT) continue;
-@@ -216,8 +226,15 @@ void input_poll_callback(void) {
+@@ -216,16 +262,33 @@ void input_poll_callback(void) {
  		//  && !PWR_ignoreSettingInput(btn, show_setting)
  	}
  
++	if ((Bench_isRecording() || Bench_isConfigMode()) && Bench_isDpadToAnalog()) {
++		bench_apply_dpad_to_analog(buttons, pad.laxis.x, pad.laxis.y,
++			&bench_live_buttons, &bench_live_lx, &bench_live_ly);
++	}
++	else {
++		bench_live_buttons = buttons;
++		bench_live_lx = pad.laxis.x;
++		bench_live_ly = pad.laxis.y;
++	}
++
 +	if (Bench_isRecording()) {
-+		Bench_onInputPolled(buttons, pad.laxis.x, pad.laxis.y, pad.raxis.x, pad.raxis.y);
++		Bench_onInputPolled(bench_live_buttons, bench_live_lx, bench_live_ly, pad.raxis.x, pad.raxis.y);
 +	}
  }
  int16_t input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
@@ -1309,8 +1425,20 @@ index 3233b214..476282e8 100644
 +		return bench_val;
 +	}
  	if (port==0 && device==RETRO_DEVICE_JOYPAD && index==0) {
- 		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return buttons;
- 		return (buttons >> id) & 1;
+-		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return buttons;
+-		return (buttons >> id) & 1;
++		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return bench_live_buttons;
++		return (bench_live_buttons >> id) & 1;
+ 	}
+ 	else if (port==0 && device==RETRO_DEVICE_ANALOG) {
+ 		if (index==RETRO_DEVICE_INDEX_ANALOG_LEFT) {
+-			if (id==RETRO_DEVICE_ID_ANALOG_X) return pad.laxis.x;
+-			else if (id==RETRO_DEVICE_ID_ANALOG_Y) return pad.laxis.y;
++			if (id==RETRO_DEVICE_ID_ANALOG_X) return bench_live_lx;
++			else if (id==RETRO_DEVICE_ID_ANALOG_Y) return bench_live_ly;
+ 		}
+ 		else if (index==RETRO_DEVICE_INDEX_ANALOG_RIGHT) {
+ 			if (id==RETRO_DEVICE_ID_ANALOG_X) return pad.raxis.x;
 diff --git a/workspace/all/minarch/ma_runframe.c b/workspace/all/minarch/ma_runframe.c
 index 696b8ef2..8eefe5e7 100644
 --- a/workspace/all/minarch/ma_runframe.c

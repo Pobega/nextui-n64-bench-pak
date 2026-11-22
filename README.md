@@ -52,6 +52,8 @@ Place the matching ReARMed savestates (`M64+SAVE` v1.6 — compatible with both 
 Select **Record Scenario Inputs** from the main menu to play any scenario live on your handheld using `rearmed-rice-240p`:
 - After the 2-second warmup, real controls are captured frame-by-frame (buttons + left/right analog sticks) for up to 30 seconds (covering both paced and uncapped runs cleanly).
 - Hold **MENU** anytime after 1 second to stop early and save atomically to `N64Bench.pak/inputs/<scenario_id>.inp`.
+- **Stickless handhelds (`Record D-Pad -> Analog`)**: automatically defaults to `on` on stickless devices (TrimUI Brick, Anbernic RG35XXSP/Plus, etc.) and `off` on sticked devices. When `on`, D-Pad directions are translated into real `lx`/`ly` analog stick values so `.inp` recordings replay identically across both ReARMed and ParaLLEl-N64.
+- **Custom button bindings (`Configure Record Controls`)**: launches an interactive test session using `config/record_controls.cfg`; press **MENU -> Controls** to remap buttons, **Save** (for console or game), and **Quit** when done.
 - Whenever `inputs/<scenario_id>.inp` exists, `benchctl plan` automatically replays it instead of the inline JSON script in `config/scenarios.json`, and `make package` includes any `.inp` files in `inputs/` cleanly inside release bundles.
 
 ## Submitting Results

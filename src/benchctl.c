@@ -1078,9 +1078,31 @@ static int cmd_plan(int argc, char **argv) {
 	return 0;
 }
 
+static void append_bind_lines(const char *src_cfg_path, const char *dst_cfg_path) {
+	FILE *src = fopen(src_cfg_path, "r");
+	if (!src) return;
+	FILE *dst = fopen(dst_cfg_path, "a");
+	if (!dst) {
+		fclose(src);
+		return;
+	}
+	char line[512];
+	while (fgets(line, sizeof(line), src)) {
+		const char *p = line;
+		while (*p == ' ' || *p == '\t') p++;
+		if (strncmp(p, "bind ", 5) == 0) {
+			fputs(p, dst);
+			size_t len = strlen(p);
+			if (len > 0 && p[len - 1] != '\n') fputc('\n', dst);
+		}
+	}
+	fclose(dst);
+	fclose(src);
+}
+
 static int cmd_record_plan(int argc, char **argv) {
 	if (argc < 8) {
-		fprintf(stderr, "Usage: benchctl record-plan <profiles.json> <scenarios.json> <pak_dir> <platform> <scenario_id> <work_dir>\n");
+		fprintf(stderr, "Usage: benchctl record-plan <profiles.json> <scenarios.json> <pak_dir> <platform> <scenario_id|auto> <work_dir>\n");
 		return 1;
 	}
 	const char *profiles_path = argv[2];
@@ -1123,43 +1145,73 @@ static int cmd_record_plan(int argc, char **argv) {
 
 	JsonVal *scens_arr = json_get(sroot, "scenarios");
 	JsonVal *sc = NULL;
+	char rom_path[MAX_PATH_LEN] = {0};
+	char state_path[MAX_PATH_LEN] = {0};
+	const char *resolved_id = scenario_id;
+
 	if (scens_arr && scens_arr->type == JSON_ARR) {
-		for (size_t i = 0; i < scens_arr->count; i++) {
-			if (strcmp(json_str(scens_arr->items[i], "id", ""), scenario_id) == 0) {
-				sc = scens_arr->items[i];
-				break;
+		if (strcmp(scenario_id, "auto") == 0) {
+			for (size_t i = 0; i < scens_arr->count; i++) {
+				JsonVal *cand = scens_arr->items[i];
+				char r_tmp[MAX_PATH_LEN], s_tmp[MAX_PATH_LEN];
+				int r_ok = resolve_rom_path(pak_dir, json_str(cand, "rom", ""), r_tmp, sizeof(r_tmp));
+				resolve_pak_path(pak_dir, json_str(cand, "state", ""), s_tmp, sizeof(s_tmp));
+				if (r_ok && (!s_tmp[0] || file_exists(s_tmp))) {
+					sc = cand;
+					resolved_id = json_str(cand, "id", "auto");
+					snprintf(rom_path, sizeof(rom_path), "%s", r_tmp);
+					snprintf(state_path, sizeof(state_path), "%s", s_tmp);
+					break;
+				}
+			}
+		}
+		else {
+			for (size_t i = 0; i < scens_arr->count; i++) {
+				if (strcmp(json_str(scens_arr->items[i], "id", ""), scenario_id) == 0) {
+					sc = scens_arr->items[i];
+					break;
+				}
+			}
+			if (sc) {
+				int rom_ok = resolve_rom_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
+				resolve_pak_path(pak_dir, json_str(sc, "state", ""), state_path, sizeof(state_path));
+				if (!rom_ok || (state_path[0] && !file_exists(state_path))) {
+					fprintf(stderr, "Scenario '%s' is missing ROM or savestate.\n", scenario_id);
+					json_free(proot); json_free(sroot);
+					return 1;
+				}
 			}
 		}
 	}
+
 	if (!sc) {
-		fprintf(stderr, "Unknown scenario id: %s\n", scenario_id);
+		fprintf(stderr, strcmp(scenario_id, "auto") == 0
+			? "No runnable scenario found (missing ROM or savestate).\n"
+			: "Unknown scenario id: %s\n", scenario_id);
 		json_free(proot); json_free(sroot);
 		return 1;
 	}
 
-	const char *sname = json_str(sc, "name", scenario_id);
-	char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
-	int rom_ok = resolve_rom_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
-	resolve_pak_path(pak_dir, json_str(sc, "state", ""), state_path, sizeof(state_path));
-	if (!rom_ok || (state_path[0] && !file_exists(state_path))) {
-		fprintf(stderr, "Scenario '%s' is missing ROM or savestate.\n", scenario_id);
-		json_free(proot); json_free(sroot);
-		return 1;
-	}
-
+	const char *sname = json_str(sc, "name", resolved_id);
 	char cfg_file[MAX_PATH_LEN];
 	snprintf(cfg_file, sizeof(cfg_file), "%s/cfg_record.cfg", work_dir);
 	write_profile_cfg(pr, cfg_file);
 
+	char controls_cfg[MAX_PATH_LEN];
+	snprintf(controls_cfg, sizeof(controls_cfg), "%s/config/record_controls.cfg", pak_dir);
+	append_bind_lines(controls_cfg, cfg_file);
+
 	int warmup = (int)json_num(sc, "warmup_frames", def_warmup);
 	char out_input[MAX_PATH_LEN];
-	snprintf(out_input, sizeof(out_input), "%s/inputs/%s.inp", pak_dir, scenario_id);
+	snprintf(out_input, sizeof(out_input), "%s/inputs/%s.inp", pak_dir, resolved_id);
 
+	printf("SCENARIO_ID=%s\n", resolved_id);
 	printf("SCENARIO_NAME=%s\n", sname);
 	printf("ROM_PATH=%s\n", rom_path);
 	printf("STATE_PATH=%s\n", state_path);
 	printf("CORE_PATH=%s\n", core_path);
 	printf("CFG_PATH=%s\n", cfg_file);
+	printf("CONTROLS_CFG=%s\n", controls_cfg);
 	printf("WARMUP=%d\n", warmup);
 	printf("OUT_INPUT=%s\n", out_input);
 
