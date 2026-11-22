@@ -43,6 +43,8 @@ Savestates are region- and revision-sensitive. Use the following uncompressed No
 The reference suite uses **zero-input built-in in-game attract demos**, ensuring Mupen64Plus-ReARMed and ParaLLEl-N64 render identical moving 3D gameplay with zero input drift between cores or frameskip modes.
 
 Place the matching ReARMed savestates (`M64+SAVE` v1.6 — compatible with both ReARMed and ParaLLEl-N64) in `N64Bench.pak/states/`:
+- **Automatic Savestate Generation (`capture_frame`)**: Run **Generate Missing Savestates (Auto)** (or accept the pre-benchmark prompt) to deterministically cold-boot missing scenarios with the bundled ReARMed core (`320x240`, Rice, `frameskip = disabled`) up to each scenario's configured `capture_frame` and save uncompressed `states/<id>.st0`.
+- **Capture State / Find Frame**: Select any scenario interactively, **Hold R1** to fast-forward past logos/intros, **Tap A** once the attract demo begins to save `states/<id>.st0` and record the exact frame number to `states/capture_frames.txt`, or **Hold MENU** to cancel.
 - If you receive `n64bench-states.tar.gz`, extract it inside `N64Bench.pak/` (`tar -xzf n64bench-states.tar.gz`), or drop `.st0.gz` files into `N64Bench.pak/states/` — `launch.sh` automatically decompresses any `.st0.gz` files on startup.
 - Any scenario whose ROM or savestate is missing is skipped automatically.
 

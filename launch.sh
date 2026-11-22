@@ -33,6 +33,8 @@ SUB_JSON="$WORK_DIR/sub.json"
 SUB_TSV="$WORK_DIR/sub.tsv"
 SUB_OUT="$WORK_DIR/sub.out"
 PLAN_TSV="$WORK_DIR/plan.tsv"
+GEN_TSV="$WORK_DIR/genstate.tsv"
+GEN_META="$WORK_DIR/genstate.meta"
 
 TAB="$(printf '\t')"
 MODE="both"
@@ -244,6 +246,40 @@ bundle_last_result() {
 	fi
 }
 
+run_genstate_plan_tsv() {
+	tsv_path="$1"
+	mkdir -p "$PAK_DIR/states"
+	GEN_SAVED=0
+	GEN_ABORTED=0
+	GEN_FAILED=0
+
+	while IFS="$TAB" read -r g_sid g_sname g_core g_rom g_state g_frame g_cfg g_inputs; do
+		[ -n "$g_sid" ] || continue
+		rm -f "$GEN_META"
+		echo "=== Generating savestate: $g_sid (frame=$g_frame) ==="
+		BENCH_ENABLE=1 \
+		BENCH_TAG="N64" \
+		BENCH_MODE="genstate" \
+		BENCH_CAPTURE_FRAME="$g_frame" \
+		BENCH_CFG_PATH="$g_cfg" \
+		BENCH_INPUT_FILE="$g_inputs" \
+		BENCH_OUT_STATE="$g_state" \
+		BENCH_OUT_META="$GEN_META" \
+		BENCH_LABEL="$g_sid" \
+		"$MINARCH_BENCH" "$g_core" "$g_rom"
+		GRC=$?
+
+		if [ "$GRC" -eq 0 ] && [ -f "$g_state" ]; then
+			GEN_SAVED=$((GEN_SAVED + 1))
+		elif [ "$GRC" -eq 42 ]; then
+			GEN_ABORTED=1
+			break
+		else
+			GEN_FAILED=$((GEN_FAILED + 1))
+		fi
+	done < "$tsv_path"
+}
+
 execute_plan() {
 	scope="$1"
 	target_id="$2"
@@ -254,8 +290,23 @@ execute_plan() {
 	TOTAL_RUNS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
 	SKIPPED_SCENS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*SKIPPED_SCENARIOS=\([0-9]*\).*/\1/p')"
 
+	if [ -z "$TOTAL_RUNS" ] || [ "$TOTAL_RUNS" -eq 0 ] || [ "${SKIPPED_SCENS:-0}" -gt 0 ]; then
+		rm -f "$GEN_TSV"
+		GEN_INFO="$("$BENCHCTL" genstate-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "missing" "$WORK_DIR" "$GEN_TSV" 2>/dev/null)"
+		GEN_PLANNED="$(printf '%s\n' "$GEN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
+		if [ -n "$GEN_PLANNED" ] && [ "$GEN_PLANNED" -gt 0 ]; then
+			if confirm_msg "$GEN_PLANNED missing savestate(s) can be auto-generated now.\n\nGenerate missing savestates before benchmarking?"; then
+				run_genstate_plan_tsv "$GEN_TSV"
+				rm -f "$PLAN_TSV"
+				PLAN_INFO="$("$BENCHCTL" plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$scope" "$target_id" "$MODE" "$WORK_DIR" "$PLAN_TSV")"
+				TOTAL_RUNS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
+				SKIPPED_SCENS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*SKIPPED_SCENARIOS=\([0-9]*\).*/\1/p')"
+			fi
+		fi
+	fi
+
 	if [ -z "$TOTAL_RUNS" ] || [ "$TOTAL_RUNS" -eq 0 ]; then
-		show_msg "No runnable benchmarks found!\n\nPlace ROMs in N64Bench.pak/roms/ (or /mnt/SDCARD/Roms/N64/) and savestates in N64Bench.pak/states/.\n\nSkipped missing scenarios: ${SKIPPED_SCENS:-0}"
+		show_msg "No runnable benchmarks found!\n\nPlace ROMs in N64Bench.pak/roms/ (or /mnt/SDCARD/Roms/N64/) and generate or copy savestates into N64Bench.pak/states/.\n\nSkipped missing scenarios: ${SKIPPED_SCENS:-0}"
 		return 1
 	fi
 
@@ -460,6 +511,95 @@ configure_record_controls() {
 	"$MINARCH_BENCH" "$REC_CORE" "$REC_ROM"
 }
 
+generate_missing_states() {
+	rm -f "$GEN_TSV"
+	GEN_INFO="$("$BENCHCTL" genstate-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "missing" "$WORK_DIR" "$GEN_TSV" 2>"$WORK_DIR/genstate.err")"
+	if [ $? -ne 0 ]; then
+		ERR_MSG="$(cat "$WORK_DIR/genstate.err" 2>/dev/null)"
+		show_msg "Cannot plan savestate generation:\n\n${ERR_MSG:-Check configuration and bundled ReARMed core.}"
+		return 1
+	fi
+
+	GEN_PLANNED="$(printf '%s\n' "$GEN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
+	GEN_NO_ROM="$(printf '%s\n' "$GEN_INFO" | sed -n 's/.*SKIPPED_NO_ROM=\([0-9]*\).*/\1/p')"
+	GEN_NO_FRAME="$(printf '%s\n' "$GEN_INFO" | sed -n 's/.*SKIPPED_NO_FRAME=\([0-9]*\).*/\1/p')"
+
+	if [ -z "$GEN_PLANNED" ] || [ "$GEN_PLANNED" -eq 0 ]; then
+		if [ "${GEN_NO_FRAME:-0}" -gt 0 ]; then
+			show_msg "No auto-generatable missing savestates.\n\n$GEN_NO_FRAME missing scenario(s) have capture_frame=0 (not configured yet).\n\nUse 'Capture State / Find Frame' to capture them interactively and log exact frame numbers."
+		elif [ "${GEN_NO_ROM:-0}" -gt 0 ]; then
+			show_msg "No auto-generatable missing savestates ($GEN_NO_ROM missing ROM(s))."
+		else
+			show_msg "All savestates for available ROMs already exist."
+		fi
+		return 0
+	fi
+
+	if ! confirm_msg "Generate $GEN_PLANNED missing savestate(s) automatically?\n\nDeterministic cold boot with bundled ReARMed.\nHold MENU anytime to abort."; then
+		return 0
+	fi
+
+	run_genstate_plan_tsv "$GEN_TSV"
+	if [ "$GEN_ABORTED" -eq 1 ]; then
+		show_msg "Savestate Generation Aborted\n\nSaved: $GEN_SAVED / $GEN_PLANNED"
+	elif [ "$GEN_FAILED" -gt 0 ]; then
+		show_msg "Savestate Generation Finished\n\nSaved: $GEN_SAVED | Failed: $GEN_FAILED"
+	else
+		show_msg "Savestates Generated!\n\nSaved: $GEN_SAVED savestate(s) into states/."
+	fi
+}
+
+capture_state_interactive() {
+	"$BENCHCTL" list-scenarios "$SCENARIOS_JSON" "$PAK_DIR" "$SUB_JSON" > "$SUB_TSV"
+	minui-list --disable-auto-sleep --file "$SUB_JSON" --format json --title "Capture State / Find Frame" --confirm-text "CAPTURE" --write-location "$SUB_OUT" >/dev/null
+	[ $? -eq 0 ] && [ -f "$SUB_OUT" ] || return
+	SEL_NAME="$(cat "$SUB_OUT")"
+	SEL_ID="$(lookup_id_by_name "$SUB_TSV" "$SEL_NAME")"
+	[ -n "$SEL_ID" ] || return
+
+	rm -f "$GEN_TSV" "$GEN_META"
+	"$BENCHCTL" genstate-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$SEL_ID" "$WORK_DIR" "$GEN_TSV" >/dev/null 2>"$WORK_DIR/genstate.err"
+	if [ $? -ne 0 ] || [ ! -s "$GEN_TSV" ]; then
+		ERR_MSG="$(cat "$WORK_DIR/genstate.err" 2>/dev/null)"
+		show_msg "Cannot capture '$SEL_ID':\n\n${ERR_MSG:-Missing ROM or bundled ReARMed core.}"
+		return 1
+	fi
+
+	IFS="$TAB" read -r c_sid c_sname c_core c_rom c_state c_frame c_cfg c_inputs < "$GEN_TSV"
+	if [ -z "$c_sid" ]; then
+		show_msg "Cannot capture '$SEL_ID': missing ROM."
+		return 1
+	fi
+
+	CAP_PROMPT="Capture savestate for ${c_sname:-$c_sid}\n\n- Hold R1: Fast-Forward past intros\n- Tap A: Capture & Save State\n- Hold MENU: Cancel\n\nSaves to: states/${c_sid}.st0"
+	if ! confirm_msg "$CAP_PROMPT"; then
+		return 0
+	fi
+
+	mkdir -p "$PAK_DIR/states"
+	BENCH_ENABLE=1 \
+	BENCH_TAG="N64" \
+	BENCH_MODE="genstate" \
+	BENCH_CAPTURE_FRAME="0" \
+	BENCH_CFG_PATH="$c_cfg" \
+	BENCH_INPUT_FILE="$c_inputs" \
+	BENCH_OUT_STATE="$c_state" \
+	BENCH_OUT_META="$GEN_META" \
+	BENCH_LABEL="$c_sid" \
+	"$MINARCH_BENCH" "$c_core" "$c_rom"
+	RC=$?
+
+	if [ "$RC" -eq 0 ] && [ -f "$c_state" ]; then
+		CAP_FRAME="$(sed -n 's/^CAPTURE_FRAME=//p' "$GEN_META" 2>/dev/null | head -n 1)"
+		[ -n "$CAP_FRAME" ] && printf '%s %s\n' "$c_sid" "$CAP_FRAME" >> "$PAK_DIR/states/capture_frames.txt"
+		show_msg "Saved states/${c_sid}.st0 at frame ${CAP_FRAME:-?}!\n\nLogged frame to states/capture_frames.txt."
+	elif [ "$RC" -eq 42 ]; then
+		show_msg "Savestate capture canceled; existing state unchanged."
+	else
+		show_msg "Savestate capture failed (exit code $RC)."
+	fi
+}
+
 cycle_mode() {
 	case "$MODE" in
 		both)     MODE="paced" ;;
@@ -471,7 +611,7 @@ cycle_mode() {
 
 while true; do
 	cat > "$MENU_JSON" <<EOF
-["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Record Scenario Inputs","Configure Record Controls","Record D-Pad -> Analog: $DPAD_ANALOG","Mode: $MODE","Check Setup / Preflight","Bundle Last Result","View Last Summary","Exit"]
+["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Generate Missing Savestates (Auto)","Capture State / Find Frame","Record Scenario Inputs","Configure Record Controls","Record D-Pad -> Analog: $DPAD_ANALOG","Mode: $MODE","Check Setup / Preflight","Bundle Last Result","View Last Summary","Exit"]
 EOF
 	rm -f "$CHOICE_OUT"
 	minui-list --disable-auto-sleep --file "$MENU_JSON" --format json --title "N64 Benchmark ($PLATFORM)" --confirm-text "SELECT" --write-location "$CHOICE_OUT" >/dev/null
@@ -493,6 +633,12 @@ EOF
 			;;
 		"Run Single Scenario")
 			pick_scenario
+			;;
+		"Generate Missing Savestates (Auto)")
+			generate_missing_states
+			;;
+		"Capture State / Find Frame")
+			capture_state_interactive
 			;;
 		"Record Scenario Inputs")
 			record_scenario

@@ -47,10 +47,10 @@ index a8f66e76..c69485b5 100644
  		if (use_core_fps || fast_forward) {
 diff --git a/workspace/all/minarch/ma_bench.c b/workspace/all/minarch/ma_bench.c
 new file mode 100644
-index 00000000..671d7fc7
+index 00000000..0a8f6dcd
 --- /dev/null
 +++ b/workspace/all/minarch/ma_bench.c
-@@ -0,0 +1,895 @@
+@@ -0,0 +1,1008 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -74,12 +74,15 @@ index 00000000..671d7fc7
 +#define BENCH_HUD_BAR_BASE_H       26
 +#define BENCH_HUD_BAR_MIN_H        38
 +#define BENCH_HUD_PROGRESS_H       3
-+#define BENCH_UNCAPPED_FLIP_MS     500
-+#define BENCH_ABORT_HOLD_MS        800
-+#define BENCH_INITIAL_FRAME_CAP    4096
-+#define BENCH_INITIAL_INPUT_CAP    256
-+#define BENCH_MISSED_VSYNC_FACTOR  1.25
-+#define BENCH_THERMAL_PATH         "/sys/class/thermal/thermal_zone0/temp"
++#define BENCH_UNCAPPED_FLIP_MS         500
++#define BENCH_GENSTATE_FF_FLIP_MS      100
++#define BENCH_GENSTATE_HUD_MS          100
++#define BENCH_GENSTATE_MIN_INTERACT_F  30
++#define BENCH_ABORT_HOLD_MS            800
++#define BENCH_INITIAL_FRAME_CAP        4096
++#define BENCH_INITIAL_INPUT_CAP        256
++#define BENCH_MISSED_VSYNC_FACTOR      1.25
++#define BENCH_THERMAL_PATH             "/sys/class/thermal/thermal_zone0/temp"
 +
 +typedef enum {
 +	BENCH_PHASE_BOOT = 0,
@@ -108,6 +111,9 @@ index 00000000..671d7fc7
 +	int uncapped;
 +	int recording;
 +	int config_mode;
++	int genstate;
++	int genstate_saved;
++	int capture_requested;
 +	int dpad_to_analog;
 +	int config_hud_cleared;
 +	int aborted;
@@ -117,11 +123,15 @@ index 00000000..671d7fc7
 +	const char *state_path;
 +	const char *input_path;
 +	const char *out_input_path;
++	const char *out_state_path;
++	const char *out_meta_path;
 +	const char *out_json_path;
 +	const char *out_csv_path;
 +	const char *label;
 +
 +	uint32_t warmup_frames;
++	uint32_t capture_frame;
++	uint32_t boot_frame;
 +	double   duration_sec;
 +
 +	BenchPhase phase;
@@ -190,6 +200,15 @@ index 00000000..671d7fc7
 +	if (!val || !val[0]) return fallback;
 +	int parsed = atoi(val);
 +	return parsed > 0 ? parsed : fallback;
++}
++
++static uint32_t bench_read_env_u32(const char *name, uint32_t fallback) {
++	const char *val = getenv(name);
++	if (!val || !val[0]) return fallback;
++	char *end = NULL;
++	unsigned long parsed = strtoul(val, &end, 10);
++	if (end == val || *end != '\0') return fallback;
++	return (uint32_t)parsed;
 +}
 +
 +static double bench_read_soc_temp_c(void) {
@@ -306,7 +325,10 @@ index 00000000..671d7fc7
 +static void bench_render_hud(void) {
 +	if (!screen || !font.tiny) return;
 +	uint32_t now_ms = SDL_GetTicks();
-+	if (bench.last_hud_ms != 0 && (now_ms - bench.last_hud_ms) < BENCH_HUD_INTERVAL_MS) return;
++	uint32_t hud_interval = (bench.genstate && bench.capture_frame == 0)
++		? BENCH_GENSTATE_HUD_MS
++		: BENCH_HUD_INTERVAL_MS;
++	if (bench.last_hud_ms != 0 && (now_ms - bench.last_hud_ms) < hud_interval) return;
 +	bench.last_hud_ms = now_ms;
 +
 +	if (bench.config_mode && bench.phase == BENCH_PHASE_RECORD) {
@@ -339,9 +361,27 @@ index 00000000..671d7fc7
 +	double progress = 0.0;
 +	char line1[256];
 +	char line2[256];
-+	const char *mode_tag = bench.config_mode ? "CONFIG" : (bench.recording ? "REC" : (bench.uncapped ? "UNCAPPED" : "PACED"));
++	const char *mode_tag = bench.genstate
++		? (bench.capture_frame > 0 ? "GENSTATE" : "FIND FRAME")
++		: (bench.config_mode ? "CONFIG" : (bench.recording ? "REC" : (bench.uncapped ? "UNCAPPED" : "PACED")));
 +
-+	if (bench.phase == BENCH_PHASE_BOOT) {
++	if (bench.genstate) {
++		snprintf(line1, sizeof(line1), "[%s] %s", mode_tag, bench.label ? bench.label : "Generate Savestate");
++		if (bench.capture_frame > 0) {
++			progress = (double)bench.boot_frame / (double)bench.capture_frame;
++			if (progress > 1.0) progress = 1.0;
++			snprintf(line2, sizeof(line2),
++				"Auto-capturing frame %u/%u (%.0f%%) | Hold MENU: Abort",
++				bench.boot_frame, bench.capture_frame, progress * 100.0);
++		}
++		else {
++			progress = bench.uncapped ? 1.0 : 0.0;
++			snprintf(line2, sizeof(line2),
++				"Frame: %u | Hold R1: FF | Tap A: Save State | Hold MENU: Cancel",
++				bench.boot_frame);
++		}
++	}
++	else if (bench.phase == BENCH_PHASE_BOOT) {
 +		snprintf(line1, sizeof(line1), "[%s] %s", mode_tag, bench.label ? bench.label : "N64 Benchmark");
 +		snprintf(line2, sizeof(line2), "Initializing core & loading savestate...");
 +	}
@@ -606,6 +646,34 @@ index 00000000..671d7fc7
 +	free(tmp_path);
 +}
 +
++static void bench_save_genstate(void) {
++	if (!bench.out_state_path || !bench.out_state_path[0]) {
++		LOG_error("Bench GENSTATE: missing BENCH_OUT_STATE\n");
++		bench.state_failed = 1;
++		bench.phase = BENCH_PHASE_DONE;
++		quit = 1;
++		return;
++	}
++	if (!State_writePath(bench.out_state_path)) {
++		LOG_error("Bench GENSTATE: failed writing %s\n", bench.out_state_path);
++		bench.state_failed = 1;
++		bench.phase = BENCH_PHASE_DONE;
++		quit = 1;
++		return;
++	}
++	if (bench.out_meta_path && bench.out_meta_path[0]) {
++		FILE *mfp = fopen(bench.out_meta_path, "w");
++		if (mfp) {
++			fprintf(mfp, "CAPTURE_FRAME=%u\n", bench.boot_frame);
++			fclose(mfp);
++		}
++	}
++	bench.genstate_saved = 1;
++	bench.phase = BENCH_PHASE_DONE;
++	quit = 1;
++	LOG_info("Bench GENSTATE: saved %s at frame %u\n", bench.out_state_path, bench.boot_frame);
++}
++
 +void Bench_initFromEnv(void) {
 +	memset(&bench, 0, sizeof(bench));
 +	const char *en = getenv("BENCH_ENABLE");
@@ -614,8 +682,12 @@ index 00000000..671d7fc7
 +	bench.active = 1;
 +	const char *mode = getenv("BENCH_MODE");
 +	bench.config_mode = (mode && strcmp(mode, "config") == 0) ? 1 : 0;
-+	bench.recording = (!bench.config_mode && mode && strcmp(mode, "record") == 0) ? 1 : 0;
-+	bench.uncapped = (!bench.config_mode && !bench.recording && mode && strcmp(mode, "uncapped") == 0) ? 1 : 0;
++	bench.genstate = (!bench.config_mode && mode && strcmp(mode, "genstate") == 0) ? 1 : 0;
++	bench.recording = (!bench.config_mode && !bench.genstate && mode && strcmp(mode, "record") == 0) ? 1 : 0;
++	bench.capture_frame = bench.genstate ? bench_read_env_u32("BENCH_CAPTURE_FRAME", 0) : 0;
++	bench.uncapped = (bench.genstate && bench.capture_frame > 0)
++		? 1
++		: ((!bench.config_mode && !bench.recording && !bench.genstate && mode && strcmp(mode, "uncapped") == 0) ? 1 : 0);
 +	const char *d2a = getenv("BENCH_DPAD_TO_ANALOG");
 +	bench.dpad_to_analog = (d2a && strcmp(d2a, "1") == 0) ? 1 : 0;
 +
@@ -623,6 +695,8 @@ index 00000000..671d7fc7
 +	bench.state_path = getenv("BENCH_STATE_PATH");
 +	bench.input_path = getenv("BENCH_INPUT_FILE");
 +	bench.out_input_path = getenv("BENCH_OUT_INPUT");
++	bench.out_state_path = getenv("BENCH_OUT_STATE");
++	bench.out_meta_path = getenv("BENCH_OUT_META");
 +	bench.out_json_path = getenv("BENCH_OUT_JSON");
 +	bench.out_csv_path = getenv("BENCH_OUT_CSV");
 +	bench.label = getenv("BENCH_LABEL");
@@ -632,7 +706,10 @@ index 00000000..671d7fc7
 +		: (bench.uncapped ? BENCH_DEFAULT_UNCAPPED_SEC : BENCH_DEFAULT_PACED_SEC);
 +	bench.warmup_frames = (uint32_t)bench_read_env_int("BENCH_WARMUP_FRAMES", BENCH_DEFAULT_WARMUP);
 +	bench.duration_sec = (double)bench_read_env_int("BENCH_DURATION_SEC", default_dur);
-+	bench.phase = BENCH_PHASE_BOOT;
++	bench.phase = bench.genstate ? BENCH_PHASE_RECORD : BENCH_PHASE_BOOT;
++	if (bench.genstate) {
++		bench.record_start_us = getMicroseconds();
++	}
 +	bench.temp_start_c = -1.0;
 +	bench.temp_end_c = -1.0;
 +	snprintf(bench.gl_renderer, sizeof(bench.gl_renderer), "unknown");
@@ -646,8 +723,9 @@ index 00000000..671d7fc7
 +		fast_forward = 1;
 +	}
 +
-+	LOG_info("Bench initialized: mode=%s dpad_to_analog=%d warmup=%u duration=%.0fs state=%s\n",
-+		bench.config_mode ? "config" : (bench.recording ? "record" : (bench.uncapped ? "uncapped" : "paced")),
++	LOG_info("Bench initialized: mode=%s capture_frame=%u dpad_to_analog=%d warmup=%u duration=%.0fs state=%s\n",
++		bench.genstate ? "genstate" : (bench.config_mode ? "config" : (bench.recording ? "record" : (bench.uncapped ? "uncapped" : "paced"))),
++		bench.capture_frame,
 +		bench.dpad_to_analog,
 +		bench.warmup_frames, bench.duration_sec,
 +		bench.state_path ? bench.state_path : "(none)");
@@ -669,6 +747,10 @@ index 00000000..671d7fc7
 +	return bench.active && bench.config_mode;
 +}
 +
++int Bench_isGenState(void) {
++	return bench.active && bench.genstate;
++}
++
 +int Bench_isDpadToAnalog(void) {
 +	return bench.active && bench.dpad_to_analog;
 +}
@@ -681,10 +763,13 @@ index 00000000..671d7fc7
 +	if (!bench.active) return BENCH_EXIT_OK;
 +	if (bench.state_failed) return BENCH_EXIT_STATE_FAIL;
 +	if (bench.config_mode) return BENCH_EXIT_OK;
++	if (bench.aborted) return BENCH_EXIT_ABORTED;
++	if (bench.genstate) {
++		return bench.genstate_saved ? BENCH_EXIT_OK : BENCH_EXIT_ABORTED;
++	}
 +	if (bench.recording) {
 +		return (bench.script_frame >= BENCH_MIN_RECORD_FRAMES) ? BENCH_EXIT_OK : BENCH_EXIT_ABORTED;
 +	}
-+	if (bench.aborted) return BENCH_EXIT_ABORTED;
 +	return BENCH_EXIT_OK;
 +}
 +
@@ -720,8 +805,11 @@ index 00000000..671d7fc7
 +
 +int Bench_shouldSkipFlipUncapped(void) {
 +	if (!bench.active || !bench.uncapped) return 0;
++	uint32_t flip_ms = (bench.genstate && bench.capture_frame == 0)
++		? BENCH_GENSTATE_FF_FLIP_MS
++		: BENCH_UNCAPPED_FLIP_MS;
 +	uint32_t now_ms = SDL_GetTicks();
-+	if (bench.last_uncapped_flip_ms != 0 && (now_ms - bench.last_uncapped_flip_ms) < BENCH_UNCAPPED_FLIP_MS) {
++	if (bench.last_uncapped_flip_ms != 0 && (now_ms - bench.last_uncapped_flip_ms) < flip_ms) {
 +		return 1;
 +	}
 +	bench.last_uncapped_flip_ms = now_ms;
@@ -730,7 +818,7 @@ index 00000000..671d7fc7
 +}
 +
 +void Bench_onAudioBatch(void) {
-+	if (!bench.active || bench.uncapped || bench.recording || bench.config_mode || bench.phase != BENCH_PHASE_RECORD) return;
++	if (!bench.active || bench.uncapped || bench.recording || bench.config_mode || bench.genstate || bench.phase != BENCH_PHASE_RECORD) return;
 +	if (perf.buffer_size > 0 && perf.buffer_free >= perf.buffer_size - 64) {
 +		bench.audio_underruns++;
 +	}
@@ -738,6 +826,17 @@ index 00000000..671d7fc7
 +
 +void Bench_onFrameEnd(void) {
 +	if (!bench.active) return;
++
++	if (bench.genstate) {
++		bench.boot_frame++;
++		bench.script_frame = bench.boot_frame;
++		if (!bench.genstate_saved &&
++			((bench.capture_frame > 0 && bench.boot_frame >= bench.capture_frame) || bench.capture_requested)) {
++			bench_save_genstate();
++		}
++		bench_render_hud();
++		return;
++	}
 +
 +	uint64_t now_us = getMicroseconds();
 +	double frame_ms = (double)(now_us - bench.frame_start_us) / 1000.0;
@@ -911,6 +1010,20 @@ index 00000000..671d7fc7
 +	else {
 +		bench.menu_hold_start_ms = 0;
 +	}
++
++	if (bench.genstate && bench.capture_frame == 0) {
++		int want_ff = PAD_isPressed(BTN_R1) ? 1 : 0;
++		if (want_ff != bench.uncapped) {
++			bench.uncapped = want_ff;
++			fast_forward = want_ff;
++			bench.last_uncapped_flip_ms = 0;
++			bench.last_hud_ms = 0;
++		}
++		if (PAD_justPressed(BTN_A) && bench.boot_frame >= BENCH_GENSTATE_MIN_INTERACT_F) {
++			bench.capture_requested = 1;
++		}
++	}
++
 +	return bench.recording ? 0 : 1;
 +}
 +
@@ -924,7 +1037,7 @@ index 00000000..671d7fc7
 +	if (bench.recording) {
 +		bench_write_recording();
 +	}
-+	else if (!bench.config_mode) {
++	else if (!bench.config_mode && !bench.genstate) {
 +		bench_write_outputs();
 +	}
 +
@@ -948,10 +1061,10 @@ index 00000000..671d7fc7
 +}
 diff --git a/workspace/all/minarch/ma_bench.h b/workspace/all/minarch/ma_bench.h
 new file mode 100644
-index 00000000..aafc7536
+index 00000000..7fad9cc0
 --- /dev/null
 +++ b/workspace/all/minarch/ma_bench.h
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,31 @@
 +#pragma once
 +
 +#include <stdint.h>
@@ -966,6 +1079,7 @@ index 00000000..aafc7536
 +int  Bench_isUncapped(void);
 +int  Bench_isRecording(void);
 +int  Bench_isConfigMode(void);
++int  Bench_isGenState(void);
 +int  Bench_isDpadToAnalog(void);
 +const char *Bench_getConfigPath(void);
 +int  Bench_getExitCode(void);
@@ -1033,7 +1147,7 @@ index 8dce3c9a..1ac51e41 100644
  	}
  	config.loaded = override ? CONFIG_GAME : CONFIG_CONSOLE;
 diff --git a/workspace/all/minarch/ma_core.c b/workspace/all/minarch/ma_core.c
-index a7f77993..c231a751 100644
+index a7f77993..215b77dd 100644
 --- a/workspace/all/minarch/ma_core.c
 +++ b/workspace/all/minarch/ma_core.c
 @@ -9,6 +9,7 @@
@@ -1044,7 +1158,20 @@ index a7f77993..c231a751 100644
  
  
  void Core_getName(char* in_name, char* out_name) {
-@@ -192,9 +193,13 @@ void Core_unload(void) {
+@@ -174,8 +175,10 @@ void Core_load(void) {
+ 	if (Cheats_load())
+ 		Core_applyCheats(&cheatcodes);
+ 
+-	SRAM_read();
+-	RTC_read();
++	if (!Bench_isActive()) {
++		SRAM_read();
++		RTC_read();
++	}
+ 	// NOTE: must be called after core.load_game!
+ 	core.set_controller_port_device(0, RETRO_DEVICE_JOYPAD); // set a default, may update after loading configs
+ 	Core_updateAVInfo();
+@@ -192,9 +195,13 @@ void Core_unload(void) {
  }
  void Core_quit(void) {
  	if (core.initialized) {
@@ -1494,7 +1621,7 @@ index 696b8ef2..8eefe5e7 100644
  	static uint64_t last_time = 0;
  	static int last_max_speed = -1;
 diff --git a/workspace/all/minarch/ma_saves.c b/workspace/all/minarch/ma_saves.c
-index 8fe053e0..e74e2a8d 100644
+index 8fe053e0..400602b3 100644
 --- a/workspace/all/minarch/ma_saves.c
 +++ b/workspace/all/minarch/ma_saves.c
 @@ -197,13 +197,8 @@ void State_getPath(char* filename) {
@@ -1523,7 +1650,7 @@ index 8fe053e0..e74e2a8d 100644
  	uint8_t rastate_header[RASTATE_HEADER_SIZE] = {0};
  
  #ifdef HAS_SRM
-@@ -301,6 +293,19 @@ error:
+@@ -301,6 +293,82 @@ error:
  	return success;
  }
  
@@ -1540,18 +1667,82 @@ index 8fe053e0..e74e2a8d 100644
 +	return State_readPath(filename);
 +}
 +
++int State_writePath(const char* filename) {
++	if (!filename || !filename[0]) return 0;
++
++	int success = 0;
++	size_t state_size = core.serialize_size();
++	if (!state_size) return 0;
++
++	int was_ff = fast_forward;
++	fast_forward = 0;
++
++	void *state = calloc(1, state_size);
++	FILE *state_file = NULL;
++	char *tmp_path = NULL;
++	if (!state) {
++		LOG_error("Couldn't allocate memory for state\n");
++		goto error;
++	}
++
++	if (!core.serialize(state, state_size)) {
++		LOG_error("Error serializing save state\n");
++		goto error;
++	}
++
++	size_t flen = strlen(filename);
++	tmp_path = malloc(flen + 5);
++	if (!tmp_path) {
++		LOG_error("Couldn't allocate memory for temp state path\n");
++		goto error;
++	}
++	snprintf(tmp_path, flen + 5, "%s.tmp", filename);
++
++	state_file = fopen(tmp_path, "wb");
++	if (!state_file) {
++		LOG_error("Error opening temp state file: %s (%s)\n", tmp_path, strerror(errno));
++		goto error;
++	}
++	if (state_size != fwrite(state, 1, state_size, state_file)) {
++		LOG_error("Error writing state data to file: %s (%s)\n", tmp_path, strerror(errno));
++		goto error;
++	}
++	if (fflush(state_file) != 0) {
++		LOG_error("Error flushing state file: %s (%s)\n", tmp_path, strerror(errno));
++		goto error;
++	}
++	fclose(state_file);
++	state_file = NULL;
++
++	if (rename(tmp_path, filename) != 0) {
++		LOG_error("Error renaming state file %s -> %s (%s)\n", tmp_path, filename, strerror(errno));
++		goto error;
++	}
++	sync();
++	success = 1;
++
++error:
++	if (state_file) fclose(state_file);
++	if (!success && tmp_path) remove(tmp_path);
++	free(tmp_path);
++	free(state);
++	fast_forward = was_ff;
++	return success;
++}
++
  int State_write(void) { // from picoarch
  	// Block save states in RetroAchievements hardcore mode
  	if (RA_isHardcoreModeActive()) {
 diff --git a/workspace/all/minarch/ma_saves.h b/workspace/all/minarch/ma_saves.h
-index 0d8882dc..6df86c60 100644
+index 0d8882dc..dc0c87ef 100644
 --- a/workspace/all/minarch/ma_saves.h
 +++ b/workspace/all/minarch/ma_saves.h
-@@ -7,6 +7,7 @@ void SRAM_write(void);
+@@ -7,6 +7,8 @@ void SRAM_write(void);
  void RTC_read(void);
  void RTC_write(void);
  void State_getPath(char* filename);
 +int  State_readPath(const char* filename);
++int  State_writePath(const char* filename);
  int  State_read(void);
  int  State_write(void);
  void State_autosave(void);

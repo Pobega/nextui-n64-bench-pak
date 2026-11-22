@@ -772,8 +772,9 @@ static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, c
 			else if (inline_inputs && inline_inputs->type == JSON_ARR && inline_inputs->count > 0) {
 				input_tag = " [SCRIPT]";
 			}
+			const char *status_tag = !rom_ok ? "[NO ROM]" : (state_ok ? "[OK]" : "[NO STATE]");
 			char display[MAX_STR_LEN + 64];
-			snprintf(display, sizeof(display), "%s %s%s", (rom_ok && state_ok) ? "[OK]" : "[MISSING]", name, input_tag);
+			snprintf(display, sizeof(display), "%s %s%s", status_tag, name, input_tag);
 
 			if (!first) fputc(',', fp);
 			first = 0;
@@ -896,10 +897,19 @@ static void write_profile_cfg(const JsonVal *profile, const char *out_cfg_path) 
 	fclose(fp);
 }
 
-static void write_scenario_inputs(const JsonVal *scen, const char *out_input_path) {
+static void write_genstate_cfg(const JsonVal *profile, const char *out_cfg_path) {
+	write_profile_cfg(profile, out_cfg_path);
+	JsonVal *opts = json_get(profile, "options");
+	if (opts && json_get(opts, "parallel-n64-dpad-to-analog")) return;
+	FILE *fp = fopen(out_cfg_path, "a");
+	if (!fp) return;
+	fprintf(fp, "parallel-n64-dpad-to-analog = disabled\n");
+	fclose(fp);
+}
+
+static void write_input_array_file(const JsonVal *inputs, const char *out_input_path) {
 	FILE *fp = fopen(out_input_path, "w");
 	if (!fp) return;
-	JsonVal *inputs = json_get(scen, "inputs");
 	if (inputs && inputs->type == JSON_ARR) {
 		for (size_t i = 0; i < inputs->count; i++) {
 			JsonVal *step = inputs->items[i];
@@ -920,6 +930,10 @@ static void write_scenario_inputs(const JsonVal *scen, const char *out_input_pat
 		}
 	}
 	fclose(fp);
+}
+
+static void write_scenario_inputs(const JsonVal *scen, const char *out_input_path) {
+	write_input_array_file(json_get(scen, "inputs"), out_input_path);
 }
 
 /*
@@ -1214,6 +1228,129 @@ static int cmd_record_plan(int argc, char **argv) {
 	printf("CONTROLS_CFG=%s\n", controls_cfg);
 	printf("WARMUP=%d\n", warmup);
 	printf("OUT_INPUT=%s\n", out_input);
+
+	json_free(proot);
+	json_free(sroot);
+	return 0;
+}
+
+static int cmd_genstate_plan(int argc, char **argv) {
+	if (argc < 8) {
+		fprintf(stderr, "Usage: benchctl genstate-plan <profiles.json> <scenarios.json> <pak_dir> <platform> <target> <work_dir> [out_plan.tsv]\n");
+		return 1;
+	}
+	const char *profiles_path = argv[2];
+	const char *scenarios_path = argv[3];
+	const char *pak_dir = argv[4];
+	const char *platform = argv[5];
+	const char *target = argv[6];
+	const char *work_dir = argv[7];
+	const char *out_plan = (argc >= 9) ? argv[8] : NULL;
+
+	JsonVal *proot = json_load_file(profiles_path);
+	JsonVal *sroot = json_load_file(scenarios_path);
+	if (!proot || !sroot) {
+		fprintf(stderr, "Failed to parse profiles or scenarios JSON\n");
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	JsonVal *profiles_arr = json_get(proot, "profiles");
+	JsonVal *pr = find_profile_by_id(profiles_arr, "rearmed-rice-240p");
+	if (!pr && profiles_arr && profiles_arr->type == JSON_ARR && profiles_arr->count > 0) {
+		pr = profiles_arr->items[0];
+	}
+	if (!pr) {
+		fprintf(stderr, "No genstate profile found in %s\n", profiles_path);
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	const char *core_file = json_str(pr, "core", "");
+	char core_path[MAX_PATH_LEN];
+	snprintf(core_path, sizeof(core_path), "%s/cores/%s/%s", pak_dir, platform, core_file);
+	if (!file_exists(core_path)) {
+		fprintf(stderr, "Missing core for genstate: %s\n", core_path);
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	char cfg_file[MAX_PATH_LEN];
+	snprintf(cfg_file, sizeof(cfg_file), "%s/cfg_genstate.cfg", work_dir);
+	write_genstate_cfg(pr, cfg_file);
+
+	FILE *plan_fp = stdout;
+	if (out_plan) {
+		plan_fp = fopen(out_plan, "w");
+		if (!plan_fp) {
+			fprintf(stderr, "Failed to write %s\n", out_plan);
+			json_free(proot); json_free(sroot);
+			return 1;
+		}
+	}
+
+	int is_missing = (strcmp(target, "missing") == 0);
+	int is_all = (strcmp(target, "all") == 0);
+	int planned = 0;
+	int skipped_no_rom = 0;
+	int skipped_no_frame = 0;
+
+	JsonVal *scens_arr = json_get(sroot, "scenarios");
+	if (scens_arr && scens_arr->type == JSON_ARR) {
+		for (size_t i = 0; i < scens_arr->count; i++) {
+			JsonVal *sc = scens_arr->items[i];
+			const char *sid = json_str(sc, "id", "");
+			if (!is_missing && !is_all && strcmp(sid, target) != 0) continue;
+
+			const char *sname = json_str(sc, "name", sid);
+			int capture_frame = (int)json_num(sc, "capture_frame", 0);
+			if (capture_frame < 0) capture_frame = 0;
+
+			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
+			int rom_ok = resolve_rom_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
+			const char *state_rel = json_str(sc, "state", "");
+			if (state_rel[0]) {
+				resolve_pak_path(pak_dir, state_rel, state_path, sizeof(state_path));
+			}
+			else {
+				snprintf(state_path, sizeof(state_path), "%s/states/%s.st0", pak_dir, sid);
+			}
+
+			if (is_missing) {
+				if (file_exists(state_path)) continue;
+				if (!rom_ok) { skipped_no_rom++; continue; }
+				if (capture_frame <= 0) { skipped_no_frame++; continue; }
+			}
+			else if (is_all) {
+				if (!rom_ok) { skipped_no_rom++; continue; }
+				if (capture_frame <= 0) { skipped_no_frame++; continue; }
+			}
+			else {
+				if (!rom_ok) {
+					fprintf(stderr, "Missing ROM for scenario '%s'.\n", sid);
+					skipped_no_rom++;
+					continue;
+				}
+			}
+
+			char boot_input_file[MAX_PATH_LEN];
+			boot_input_file[0] = '\0';
+			JsonVal *boot_inputs = json_get(sc, "boot_inputs");
+			if (boot_inputs && boot_inputs->type == JSON_ARR && boot_inputs->count > 0) {
+				snprintf(boot_input_file, sizeof(boot_input_file), "%s/boot_inputs_%s.txt", work_dir, sid);
+				write_input_array_file(boot_inputs, boot_input_file);
+			}
+
+			fprintf(plan_fp, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+				sid, sname, core_path, rom_path, state_path, capture_frame, cfg_file, boot_input_file);
+			planned++;
+		}
+	}
+
+	if (out_plan) {
+		fclose(plan_fp);
+		printf("PLANNED=%d SKIPPED_NO_ROM=%d SKIPPED_NO_FRAME=%d\n", planned, skipped_no_rom, skipped_no_frame);
+	}
 
 	json_free(proot);
 	json_free(sroot);
@@ -1528,7 +1665,7 @@ static int cmd_aggregate(int argc, char **argv) {
 
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		fprintf(stderr, "Usage: benchctl <list-tiers|list-profiles|list-scenarios|preflight|record-plan|plan|aggregate> ...\n");
+		fprintf(stderr, "Usage: benchctl <list-tiers|list-profiles|list-scenarios|preflight|record-plan|genstate-plan|plan|aggregate> ...\n");
 		return 1;
 	}
 	if (strcmp(argv[1], "list-tiers") == 0 && argc >= 4)
@@ -1541,6 +1678,8 @@ int main(int argc, char **argv) {
 		return cmd_preflight(argv[2], argv[3]);
 	if (strcmp(argv[1], "record-plan") == 0)
 		return cmd_record_plan(argc, argv);
+	if (strcmp(argv[1], "genstate-plan") == 0)
+		return cmd_genstate_plan(argc, argv);
 	if (strcmp(argv[1], "plan") == 0)
 		return cmd_plan(argc, argv);
 	if (strcmp(argv[1], "aggregate") == 0)
