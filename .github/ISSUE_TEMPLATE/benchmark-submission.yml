@@ -1,0 +1,69 @@
+name: Submit N64 Benchmark Results
+description: Share an N64Bench result bundle from your NextUI handheld for community comparison.
+title: "[Bench]: "
+labels: ["benchmark-submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for contributing benchmark results! After running **Community Standard (10 Profiles, 240p+480p)** on your handheld, N64Bench automatically creates a single submission archive at:
+        `/mnt/SDCARD/N64Bench-Submissions/N64Bench_<platform>_<device>_<timestamp>.tar.gz`
+        (or inside `N64Bench.pak/results/`).
+
+  - type: input
+    id: handheld_model
+    attributes:
+      label: Handheld Model
+      description: Exact device name (e.g., TrimUI Brick, TrimUI Smart Pro, Anbernic RG35XXSP, Anbernic RG35XX Plus).
+      placeholder: "e.g. TrimUI Brick"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: NextUI Platform
+      description: Target platform folder where N64Bench.pak is installed.
+      options:
+        - tg5040
+        - tg5050
+        - h700
+    validations:
+      required: true
+
+  - type: input
+    id: nextui_version
+    attributes:
+      label: NextUI Version
+      description: Version shown in NextUI Settings or Preflight Check (if known).
+      placeholder: "e.g. v2.4.0"
+    validations:
+      required: false
+
+  - type: textarea
+    id: firmware_notes
+    attributes:
+      label: Firmware / Kernel Notes
+      description: Note whether you are running stock firmware/clocks or any overclock, custom kernel, or thermal mod.
+      placeholder: "Stock firmware, no overclock, ambient ~22C..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: archive_attachment
+    attributes:
+      label: Benchmark Archive (.tar.gz)
+      description: Drag and drop your single `N64Bench_*.tar.gz` file from `/mnt/SDCARD/N64Bench-Submissions/` directly into the box below.
+      placeholder: "Drag and drop N64Bench_<platform>_<device>_<timestamp>.tar.gz here"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Submission Checklist
+      options:
+        - label: I ran the **Community Standard** tier (or noted any custom scope above).
+          required: false
+        - label: Device was on a charger or above 50% battery during the run.
+          required: false

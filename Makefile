@@ -30,7 +30,7 @@ BIN_DIR := $(BUILD_DIR)/bin
 CORES_DIR := $(BUILD_DIR)/cores
 DIST_DIR := $(CURDIR)/dist
 
-.PHONY: all src-nextui build-minarch build-benchctl build-ui build-cores build package release push clean distclean \
+.PHONY: all src-nextui build-minarch build-benchctl build-ui build-cores build package states-pack release push clean distclean \
 	$(foreach p,$(PLATFORMS),minarch-$(p) benchctl-$(p) ui-$(p) cores-$(p))
 
 all: release
@@ -163,20 +163,20 @@ build-cores: $(foreach p,$(PLATFORMS),cores-$(p))
 build: build-minarch build-benchctl build-ui build-cores
 
 package:
-	@echo "Packaging $(PAK_NAME).pak.zip and platform tool distributions..."
+	@echo "Packaging $(PAK_NAME).pak.zip, $(PAK_NAME)-manual.zip, and platform tool distributions..."
 	@mkdir -p $(DIST_DIR)
-	@rm -rf $(BUILD_DIR)/staging $(DIST_DIR)/$(PAK_NAME).pak.zip
-	@mkdir -p $(BUILD_DIR)/staging/config $(BUILD_DIR)/staging/roms $(BUILD_DIR)/staging/states
-	@cp pak.json launch.sh LICENSE README.md $(BUILD_DIR)/staging/
-	@chmod 0755 $(BUILD_DIR)/staging/launch.sh
-	@cp config/*.json $(BUILD_DIR)/staging/config/
-	@cp roms/.gitkeep $(BUILD_DIR)/staging/roms/
-	@cp states/.gitkeep $(BUILD_DIR)/staging/states/
+	@rm -rf $(BUILD_DIR)/staging $(DIST_DIR)/$(PAK_NAME).pak.zip $(DIST_DIR)/$(PAK_NAME)-manual.zip $(DIST_DIR)/SHA256SUMS.txt
+	@mkdir -p $(BUILD_DIR)/staging/$(PAK_NAME).pak/config $(BUILD_DIR)/staging/$(PAK_NAME).pak/roms $(BUILD_DIR)/staging/$(PAK_NAME).pak/states
+	@cp pak.json launch.sh LICENSE README.md $(BUILD_DIR)/staging/$(PAK_NAME).pak/
+	@chmod 0755 $(BUILD_DIR)/staging/$(PAK_NAME).pak/launch.sh
+	@cp config/*.json $(BUILD_DIR)/staging/$(PAK_NAME).pak/config/
+	@cp roms/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/roms/
+	@cp states/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/states/
 	@for p in $(PLATFORMS); do \
-		mkdir -p $(BUILD_DIR)/staging/bin/$$p $(BUILD_DIR)/staging/cores/$$p; \
-		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(BUILD_DIR)/staging/bin/$$p/; \
-		cp $(CORES_DIR)/$$p/*.so $(BUILD_DIR)/staging/cores/$$p/; \
-		chmod 0755 $(BUILD_DIR)/staging/bin/$$p/* $(BUILD_DIR)/staging/cores/$$p/*; \
+		mkdir -p $(BUILD_DIR)/staging/$(PAK_NAME).pak/bin/$$p $(BUILD_DIR)/staging/$(PAK_NAME).pak/cores/$$p; \
+		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(BUILD_DIR)/staging/$(PAK_NAME).pak/bin/$$p/; \
+		cp $(CORES_DIR)/$$p/*.so $(BUILD_DIR)/staging/$(PAK_NAME).pak/cores/$$p/; \
+		chmod 0755 $(BUILD_DIR)/staging/$(PAK_NAME).pak/bin/$$p/* $(BUILD_DIR)/staging/$(PAK_NAME).pak/cores/$$p/*; \
 		mkdir -p $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/cores/$$p \
 			$(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/config $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/roms $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/states; \
 		cp pak.json launch.sh LICENSE README.md $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/; \
@@ -185,8 +185,20 @@ package:
 		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p/; \
 		cp $(CORES_DIR)/$$p/*.so $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/cores/$$p/; \
 	done
-	@cd $(BUILD_DIR)/staging && zip -r $(DIST_DIR)/$(PAK_NAME).pak.zip .
-	@echo "Successfully packaged $(DIST_DIR)/$(PAK_NAME).pak.zip"
+	@cd $(BUILD_DIR)/staging/$(PAK_NAME).pak && zip -r $(DIST_DIR)/$(PAK_NAME).pak.zip .
+	@cd $(BUILD_DIR)/staging && zip -r $(DIST_DIR)/$(PAK_NAME)-manual.zip $(PAK_NAME).pak
+	@cd $(DIST_DIR) && sha256sum $(PAK_NAME).pak.zip $(PAK_NAME)-manual.zip > SHA256SUMS.txt
+	@echo "Successfully packaged $(DIST_DIR)/$(PAK_NAME).pak.zip and $(DIST_DIR)/$(PAK_NAME)-manual.zip"
+
+states-pack:
+	@mkdir -p $(DIST_DIR)
+	@if ! ls states/*.st0 >/dev/null 2>&1; then \
+		echo "No local states/*.st0 found; skipping n64bench-states.tar.gz."; \
+	else \
+		rm -f $(DIST_DIR)/n64bench-states.tar.gz; \
+		tar -czf $(DIST_DIR)/n64bench-states.tar.gz states/*.st0; \
+		echo "Successfully packed $(DIST_DIR)/n64bench-states.tar.gz"; \
+	fi
 
 release: build package
 
