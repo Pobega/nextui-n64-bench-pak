@@ -732,6 +732,19 @@ static int cmd_list_profiles(const char *profiles_path, const char *out_path) {
 	return 0;
 }
 
+static int has_recorded_input(const char *pak_dir, const char *sid, char *out, size_t out_sz) {
+	if (!pak_dir || !pak_dir[0] || !sid || !sid[0]) return 0;
+	char buf[MAX_PATH_LEN * 2];
+	int n = snprintf(buf, sizeof(buf), "%s/inputs/%s.inp", pak_dir, sid);
+	if (n <= 0 || (size_t)n >= out_sz) return 0;
+	struct stat st;
+	if (stat(buf, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+		memcpy(out, buf, (size_t)n + 1);
+		return 1;
+	}
+	return 0;
+}
+
 static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, const char *out_path) {
 	JsonVal *root = json_load_file(scenarios_path);
 	if (!root) return 1;
@@ -746,13 +759,21 @@ static int cmd_list_scenarios(const char *scenarios_path, const char *pak_dir, c
 			JsonVal *sc = scens->items[i];
 			const char *id = json_str(sc, "id", "");
 			const char *name = json_str(sc, "name", id);
-			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
+			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN], rec_path[MAX_PATH_LEN];
 			int rom_ok = resolve_rom_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
 			resolve_pak_path(pak_dir, json_str(sc, "state", ""), state_path, sizeof(state_path));
 
 			int state_ok = !state_path[0] || file_exists(state_path);
-			char display[MAX_STR_LEN + 32];
-			snprintf(display, sizeof(display), "%s %s", (rom_ok && state_ok) ? "[OK]" : "[MISSING]", name);
+			JsonVal *inline_inputs = json_get(sc, "inputs");
+			const char *input_tag = "";
+			if (has_recorded_input(pak_dir, id, rec_path, sizeof(rec_path))) {
+				input_tag = " [REC]";
+			}
+			else if (inline_inputs && inline_inputs->type == JSON_ARR && inline_inputs->count > 0) {
+				input_tag = " [SCRIPT]";
+			}
+			char display[MAX_STR_LEN + 64];
+			snprintf(display, sizeof(display), "%s %s%s", (rom_ok && state_ok) ? "[OK]" : "[MISSING]", name, input_tag);
 
 			if (!first) fputc(',', fp);
 			first = 0;
@@ -787,6 +808,7 @@ static int cmd_preflight(const char *scenarios_path, const char *pak_dir) {
 
 	int roms_found = 0, roms_total = 0;
 	int states_found = 0, states_total = 0;
+	int recorded_inputs = 0;
 	char missing[1024] = {0};
 
 	if (scens && scens->type == JSON_ARR) {
@@ -796,7 +818,7 @@ static int cmd_preflight(const char *scenarios_path, const char *pak_dir) {
 			const char *rom_rel = json_str(sc, "rom", "");
 			const char *state_rel = json_str(sc, "state", "");
 
-			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
+			char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN], rec_path[MAX_PATH_LEN];
 			roms_total++;
 			if (resolve_rom_path(pak_dir, rom_rel, rom_path, sizeof(rom_path))) {
 				roms_found++;
@@ -819,6 +841,10 @@ static int cmd_preflight(const char *scenarios_path, const char *pak_dir) {
 					append_missing_item(missing, sizeof(missing), tag);
 				}
 			}
+
+			if (has_recorded_input(pak_dir, sid, rec_path, sizeof(rec_path))) {
+				recorded_inputs++;
+			}
 		}
 	}
 
@@ -831,6 +857,7 @@ static int cmd_preflight(const char *scenarios_path, const char *pak_dir) {
 	printf("ROMS_TOTAL=%d\n", roms_total);
 	printf("STATES_FOUND=%d\n", states_found);
 	printf("STATES_TOTAL=%d\n", states_total);
+	printf("RECORDED_INPUTS=%d\n", recorded_inputs);
 	printf("BATTERY_PCT=%d\n", battery_pct);
 	printf("SOC_MODEL=%s\n", soc_model);
 	printf("NEXTUI_VERSION=%s\n", nextui_ver);
@@ -1003,8 +1030,10 @@ static int cmd_plan(int argc, char **argv) {
 			}
 
 			char input_file[MAX_PATH_LEN];
-			snprintf(input_file, sizeof(input_file), "%s/inputs_%s.txt", work_dir, sid);
-			write_scenario_inputs(sc, input_file);
+			if (!has_recorded_input(pak_dir, sid, input_file, sizeof(input_file))) {
+				snprintf(input_file, sizeof(input_file), "%s/inputs_%s.txt", work_dir, sid);
+				write_scenario_inputs(sc, input_file);
+			}
 
 			int warmup = (int)json_num(sc, "warmup_frames", def_warmup);
 			int paced_s = (int)json_num(sc, "paced_seconds", def_paced);
@@ -1046,6 +1075,96 @@ static int cmd_plan(int argc, char **argv) {
 	json_free(proot);
 	json_free(sroot);
 	printf("PLANNED=%d SKIPPED_SCENARIOS=%d\n", run_count, skipped_missing);
+	return 0;
+}
+
+static int cmd_record_plan(int argc, char **argv) {
+	if (argc < 8) {
+		fprintf(stderr, "Usage: benchctl record-plan <profiles.json> <scenarios.json> <pak_dir> <platform> <scenario_id> <work_dir>\n");
+		return 1;
+	}
+	const char *profiles_path = argv[2];
+	const char *scenarios_path = argv[3];
+	const char *pak_dir = argv[4];
+	const char *platform = argv[5];
+	const char *scenario_id = argv[6];
+	const char *work_dir = argv[7];
+
+	JsonVal *proot = json_load_file(profiles_path);
+	JsonVal *sroot = json_load_file(scenarios_path);
+	if (!proot || !sroot) {
+		fprintf(stderr, "Failed to parse profiles or scenarios JSON\n");
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	JsonVal *defaults = json_get(proot, "defaults");
+	int def_warmup = (int)json_num(defaults, "warmup_frames", 120);
+
+	JsonVal *profiles_arr = json_get(proot, "profiles");
+	JsonVal *pr = find_profile_by_id(profiles_arr, "rearmed-rice-240p");
+	if (!pr && profiles_arr && profiles_arr->type == JSON_ARR && profiles_arr->count > 0) {
+		pr = profiles_arr->items[0];
+	}
+	if (!pr) {
+		fprintf(stderr, "No recording profile found in %s\n", profiles_path);
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	const char *core_file = json_str(pr, "core", "");
+	char core_path[MAX_PATH_LEN];
+	snprintf(core_path, sizeof(core_path), "%s/cores/%s/%s", pak_dir, platform, core_file);
+	if (!file_exists(core_path)) {
+		fprintf(stderr, "Missing recording core: %s\n", core_path);
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	JsonVal *scens_arr = json_get(sroot, "scenarios");
+	JsonVal *sc = NULL;
+	if (scens_arr && scens_arr->type == JSON_ARR) {
+		for (size_t i = 0; i < scens_arr->count; i++) {
+			if (strcmp(json_str(scens_arr->items[i], "id", ""), scenario_id) == 0) {
+				sc = scens_arr->items[i];
+				break;
+			}
+		}
+	}
+	if (!sc) {
+		fprintf(stderr, "Unknown scenario id: %s\n", scenario_id);
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	const char *sname = json_str(sc, "name", scenario_id);
+	char rom_path[MAX_PATH_LEN], state_path[MAX_PATH_LEN];
+	int rom_ok = resolve_rom_path(pak_dir, json_str(sc, "rom", ""), rom_path, sizeof(rom_path));
+	resolve_pak_path(pak_dir, json_str(sc, "state", ""), state_path, sizeof(state_path));
+	if (!rom_ok || (state_path[0] && !file_exists(state_path))) {
+		fprintf(stderr, "Scenario '%s' is missing ROM or savestate.\n", scenario_id);
+		json_free(proot); json_free(sroot);
+		return 1;
+	}
+
+	char cfg_file[MAX_PATH_LEN];
+	snprintf(cfg_file, sizeof(cfg_file), "%s/cfg_record.cfg", work_dir);
+	write_profile_cfg(pr, cfg_file);
+
+	int warmup = (int)json_num(sc, "warmup_frames", def_warmup);
+	char out_input[MAX_PATH_LEN];
+	snprintf(out_input, sizeof(out_input), "%s/inputs/%s.inp", pak_dir, scenario_id);
+
+	printf("SCENARIO_NAME=%s\n", sname);
+	printf("ROM_PATH=%s\n", rom_path);
+	printf("STATE_PATH=%s\n", state_path);
+	printf("CORE_PATH=%s\n", core_path);
+	printf("CFG_PATH=%s\n", cfg_file);
+	printf("WARMUP=%d\n", warmup);
+	printf("OUT_INPUT=%s\n", out_input);
+
+	json_free(proot);
+	json_free(sroot);
 	return 0;
 }
 
@@ -1357,7 +1476,7 @@ static int cmd_aggregate(int argc, char **argv) {
 
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		fprintf(stderr, "Usage: benchctl <list-tiers|list-profiles|list-scenarios|preflight|plan|aggregate> ...\n");
+		fprintf(stderr, "Usage: benchctl <list-tiers|list-profiles|list-scenarios|preflight|record-plan|plan|aggregate> ...\n");
 		return 1;
 	}
 	if (strcmp(argv[1], "list-tiers") == 0 && argc >= 4)
@@ -1368,6 +1487,8 @@ int main(int argc, char **argv) {
 		return cmd_list_scenarios(argv[2], argv[3], argv[4]);
 	if (strcmp(argv[1], "preflight") == 0 && argc >= 4)
 		return cmd_preflight(argv[2], argv[3]);
+	if (strcmp(argv[1], "record-plan") == 0)
+		return cmd_record_plan(argc, argv);
 	if (strcmp(argv[1], "plan") == 0)
 		return cmd_plan(argc, argv);
 	if (strcmp(argv[1], "aggregate") == 0)

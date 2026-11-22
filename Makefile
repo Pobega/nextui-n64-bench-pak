@@ -166,22 +166,27 @@ package:
 	@echo "Packaging $(PAK_NAME).pak.zip, $(PAK_NAME)-manual.zip, and platform tool distributions..."
 	@mkdir -p $(DIST_DIR)
 	@rm -rf $(BUILD_DIR)/staging $(DIST_DIR)/$(PAK_NAME).pak.zip $(DIST_DIR)/$(PAK_NAME)-manual.zip $(DIST_DIR)/SHA256SUMS.txt
-	@mkdir -p $(BUILD_DIR)/staging/$(PAK_NAME).pak/config $(BUILD_DIR)/staging/$(PAK_NAME).pak/roms $(BUILD_DIR)/staging/$(PAK_NAME).pak/states
+	@mkdir -p $(BUILD_DIR)/staging/$(PAK_NAME).pak/config $(BUILD_DIR)/staging/$(PAK_NAME).pak/roms $(BUILD_DIR)/staging/$(PAK_NAME).pak/states $(BUILD_DIR)/staging/$(PAK_NAME).pak/inputs
 	@cp pak.json launch.sh LICENSE README.md $(BUILD_DIR)/staging/$(PAK_NAME).pak/
 	@chmod 0755 $(BUILD_DIR)/staging/$(PAK_NAME).pak/launch.sh
 	@cp config/*.json $(BUILD_DIR)/staging/$(PAK_NAME).pak/config/
 	@cp roms/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/roms/
 	@cp states/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/states/
+	@cp inputs/.gitkeep $(BUILD_DIR)/staging/$(PAK_NAME).pak/inputs/
+	@for f in inputs/*.inp; do [ -f "$$f" ] && cp "$$f" $(BUILD_DIR)/staging/$(PAK_NAME).pak/inputs/; done || true
 	@for p in $(PLATFORMS); do \
 		mkdir -p $(BUILD_DIR)/staging/$(PAK_NAME).pak/bin/$$p $(BUILD_DIR)/staging/$(PAK_NAME).pak/cores/$$p; \
 		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(BUILD_DIR)/staging/$(PAK_NAME).pak/bin/$$p/; \
 		cp $(CORES_DIR)/$$p/*.so $(BUILD_DIR)/staging/$(PAK_NAME).pak/cores/$$p/; \
 		chmod 0755 $(BUILD_DIR)/staging/$(PAK_NAME).pak/bin/$$p/* $(BUILD_DIR)/staging/$(PAK_NAME).pak/cores/$$p/*; \
 		mkdir -p $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/cores/$$p \
-			$(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/config $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/roms $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/states; \
+			$(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/config $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/roms $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/states \
+			$(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/inputs; \
 		cp pak.json launch.sh LICENSE README.md $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/; \
 		chmod 0755 $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/launch.sh; \
 		cp config/*.json $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/config/; \
+		cp inputs/.gitkeep $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/inputs/; \
+		for f in inputs/*.inp; do [ -f "$$f" ] && cp "$$f" $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/inputs/; done || true; \
 		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p/; \
 		cp $(CORES_DIR)/$$p/*.so $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/cores/$$p/; \
 	done

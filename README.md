@@ -43,10 +43,16 @@ Place the matching ReARMed savestates (`M64+SAVE` v1.6 — compatible with both 
 ## Running Benchmarks On-Device
 
 1. Launch **N64Bench** from NextUI's **Tools** menu.
-2. Run **Check Setup / Preflight** to confirm ROMs found, savestates found, SoC model, NextUI version, and battery level.
+2. Run **Check Setup / Preflight** to confirm ROMs found, savestates found, recorded inputs, SoC model, NextUI version, and battery level.
 3. Select **Run Benchmark Tier (Recommended)** -> **Community Standard (10 Profiles, 240p+480p)** for standardized cross-device submissions (compares all 5 renderer/core profiles at both `320x240` and `640x480` in `paced` and `uncapped` modes).
    - Keep your handheld plugged in or above 50% battery before starting.
    - Hold **MENU** during any run to abort cleanly.
+
+### Recording Custom Scenario Inputs
+Select **Record Scenario Inputs** from the main menu to play any scenario live on your handheld using `rearmed-rice-240p`:
+- After the 2-second warmup, real controls are captured frame-by-frame (buttons + left/right analog sticks) for up to 30 seconds (covering both paced and uncapped runs cleanly).
+- Hold **MENU** anytime after 1 second to stop early and save atomically to `N64Bench.pak/inputs/<scenario_id>.inp`.
+- Whenever `inputs/<scenario_id>.inp` exists, `benchctl plan` automatically replays it instead of the inline JSON script in `config/scenarios.json`, and `make package` includes any `.inp` files in `inputs/` cleanly inside release bundles.
 
 ## Submitting Results
 
