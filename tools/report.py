@@ -68,9 +68,20 @@ def load_all_runs(summary_files: List[Path]) -> List[Dict[str, Any]]:
         base_dir = sfile.parent
         meta = {
             "source_dir": base_dir.name,
+            "schema_version": data.get("schema_version", 1),
             "timestamp_utc": data.get("timestamp_utc", ""),
             "platform": data.get("platform", "unknown"),
             "device": data.get("device", data.get("platform", "unknown")),
+            "pak_version": data.get("pak_version", ""),
+            "nextui_version": data.get("nextui_version", ""),
+            "soc_model": data.get("soc_model", ""),
+            "gl_renderer": data.get("gl_renderer", ""),
+            "gl_version": data.get("gl_version", ""),
+            "suite_scope": data.get("suite_scope", ""),
+            "suite_target": data.get("suite_target", ""),
+            "mode_selected": data.get("mode_selected", ""),
+            "battery_start_pct": data.get("battery_start_pct", -1),
+            "battery_end_pct": data.get("battery_end_pct", -1),
             "cpu_governor": data.get("cpu_governor", "unknown"),
             "cpu_max_khz": data.get("cpu_max_khz", 0),
             "kernel": data.get("kernel", ""),
@@ -86,6 +97,21 @@ def load_all_runs(summary_files: List[Path]) -> List[Dict[str, Any]]:
     return records
 
 
+def format_battery_delta(start_pct: Any, end_pct: Any) -> str:
+    try:
+        s_val = int(start_pct)
+        e_val = int(end_pct)
+    except (TypeError, ValueError):
+        return "—"
+    if s_val >= 0 and e_val >= 0:
+        return f"{s_val}%→{e_val}%"
+    if e_val >= 0:
+        return f"{e_val}%"
+    if s_val >= 0:
+        return f"{s_val}%"
+    return "—"
+
+
 def generate_markdown(records: List[Dict[str, Any]]) -> str:
     lines: List[str] = [
         "# N64Bench Performance Report",
@@ -93,6 +119,33 @@ def generate_markdown(records: List[Dict[str, Any]]) -> str:
         f"Total benchmark runs loaded: **{len(records)}**",
         "",
     ]
+
+    seen_sources: Dict[str, Dict[str, Any]] = {}
+    for r in records:
+        src = str(r.get("source_dir", ""))
+        if src not in seen_sources:
+            seen_sources[src] = r
+
+    if seen_sources:
+        lines.append("## Devices & Environment")
+        lines.append("")
+        lines.append("| Device | SoC | GL Renderer | CPU | Kernel | Pak / NextUI | Battery |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for r in seen_sources.values():
+            khz = int(r.get("cpu_max_khz") or 0)
+            cpu_str = f"{khz / 1000:.0f} MHz ({r.get('cpu_governor', 'unknown')})" if khz > 0 else str(r.get("cpu_governor", "unknown"))
+            soc_str = str(r.get("soc_model") or "—")
+            gl_str = str(r.get("gl_renderer") or "—")
+            ver_parts = [p for p in [
+                f"Pak {r['pak_version']}" if r.get("pak_version") and r.get("pak_version") != "unknown" else "",
+                f"NextUI {r['nextui_version']}" if r.get("nextui_version") and r.get("nextui_version") != "unknown" else "",
+            ] if p]
+            ver_str = " / ".join(ver_parts) if ver_parts else "—"
+            bat_str = format_battery_delta(r.get("battery_start_pct", -1), r.get("battery_end_pct", -1))
+            lines.append(
+                f"| {r['device_label']} | {soc_str} | {gl_str} | {cpu_str} | {r.get('kernel') or '—'} | {ver_str} | {bat_str} |"
+            )
+        lines.append("")
 
     scenarios = sorted({(r.get("scenario_id", ""), r.get("scenario_name", "")) for r in records})
     for sid, sname in scenarios:
@@ -179,6 +232,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   canvas { width: 100%; height: 220px; display: block; background: #0b0e14; border-radius: 6px; border: 1px solid var(--border); }
   .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--muted); }
+  .env-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .env-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 0.82rem; }
+  .env-card .env-title { font-weight: 600; color: #f0f6fc; margin-bottom: 6px; font-size: 0.9rem; }
+  .env-card .env-row { color: var(--muted); display: flex; justify-content: space-between; gap: 8px; margin: 2px 0; }
+  .env-card .env-val { color: var(--text); text-align: right; }
 </style>
 </head>
 <body>
@@ -189,6 +247,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </header>
 <main>
+  <div class="env-grid" id="env-cards"></div>
   <div class="controls">
     <label>Scenario: <select id="sel-scenario"></select></label>
     <label>Device: <select id="sel-device"></select></label>
@@ -247,16 +306,51 @@ let currentMode = "paced";
 let selectedRunKey = null;
 
 const uniq = arr => [...new Set(arr)];
+const escHtml = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]));
 const selScenario = document.getElementById("sel-scenario");
 const selDevice = document.getElementById("sel-device");
 const btnPaced = document.getElementById("btn-paced");
 const btnUncapped = document.getElementById("btn-uncapped");
+
+function fmtBattery(s, e) {
+  if (s >= 0 && e >= 0) return `${s}% → ${e}%`;
+  if (e >= 0) return `${e}%`;
+  if (s >= 0) return `${s}%`;
+  return "";
+}
+
+function renderEnvCards() {
+  const bySource = new Map();
+  DATA.forEach(r => { if (!bySource.has(r.source_dir)) bySource.set(r.source_dir, r); });
+  const container = document.getElementById("env-cards");
+  container.innerHTML = [...bySource.values()].map(r => {
+    const cpu = r.cpu_max_khz > 0 ? `${(r.cpu_max_khz / 1000).toFixed(0)} MHz (${r.cpu_governor || "unknown"})` : (r.cpu_governor || "unknown");
+    const bat = fmtBattery(r.battery_start_pct, r.battery_end_pct);
+    const ver = [
+      r.pak_version && r.pak_version !== "unknown" ? `Pak v${r.pak_version}` : "",
+      r.nextui_version && r.nextui_version !== "unknown" ? `NextUI ${r.nextui_version}` : ""
+    ].filter(Boolean).join(" · ");
+    const rows = [
+      r.soc_model && r.soc_model !== "unknown" ? ["SoC", r.soc_model] : null,
+      r.gl_renderer && r.gl_renderer !== "unknown" ? ["GL Renderer", r.gl_renderer] : null,
+      ["CPU", cpu],
+      r.kernel ? ["Kernel", r.kernel] : null,
+      ver ? ["Software", ver] : null,
+      bat ? ["Battery", bat] : null
+    ].filter(Boolean);
+    return `<div class="env-card">
+      <div class="env-title">${escHtml(r.device_label)} <span class="mono">(${escHtml(r.source_dir)})</span></div>
+      ${rows.map(([k, v]) => `<div class="env-row"><span>${escHtml(k)}</span><span class="env-val">${escHtml(v)}</span></div>`).join("")}
+    </div>`;
+  }).join("");
+}
 
 function initFilters() {
   const devices = uniq(DATA.map(r => r.device_label)).sort();
   const scenarios = uniq(DATA.map(r => r.scenario_id)).sort();
   document.getElementById("meta-summary").textContent =
     `${DATA.length} runs across ${devices.length} device(s) and ${scenarios.length} scenario(s)`;
+  renderEnvCards();
 
   selScenario.innerHTML = `<option value="ALL">All Scenarios</option>` +
     scenarios.map(id => {
@@ -338,13 +432,17 @@ function drawSpikes(run) {
   });
   ctx.stroke();
 
+  const romSha = run.rom_sha256 && run.rom_sha256 !== "unknown" ? `<span class="mono">ROM: ${escHtml(run.rom_sha256.slice(0, 12))}</span>` : "";
+  const glInfo = run.gl_renderer && run.gl_renderer !== "unknown" ? `<span>GL: <b>${escHtml(run.gl_renderer)}</b></span>` : "";
   document.getElementById("spike-meta").innerHTML =
     `<span>Avg: <b>${run.frame_ms_avg.toFixed(2)}ms</b></span>` +
     `<span>p50: <b>${run.frame_ms_p50.toFixed(2)}ms</b></span>` +
     `<span>p95: <b>${run.frame_ms_p95.toFixed(2)}ms</b></span>` +
     `<span>p99: <b>${run.frame_ms_p99.toFixed(2)}ms</b></span>` +
     `<span>Max: <b>${run.frame_ms_max.toFixed(2)}ms</b></span>` +
-    `<span class="mono">SHA256: ${(run.core_sha256 || "").slice(0, 12)}</span>`;
+    glInfo +
+    `<span class="mono">Core: ${escHtml((run.core_sha256 || "").slice(0, 12))}</span>` +
+    romSha;
 }
 
 function render() {
