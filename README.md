@@ -29,14 +29,16 @@ Savestates are region- and revision-sensitive. Use the following uncompressed No
 
 | Scenario ID | Expected Filename | Size | CRC32 | MD5 | SHA-1 | SHA-256 |
 | --- | --- | ---: | --- | --- | --- | --- |
-| `sm64-bobomb` | `Super Mario 64 (USA).z64` | 8 MiB | `3ce60709` | `20b854b239203baf6c961b850a4a51a2` | `9bef1128717f958171a4afac3ed78ee2bb4e86ce` | `17ce077343c6133f8c9f2d6d6d9a4ab62c8cd2aa57c40aea1f490b4c8bb21d91` |
-| `oot-hyrule` | `Legend of Zelda, The - Ocarina of Time (USA).z64` | 32 MiB | `cd16c529` | `5bd1fe107bf8106b2ab6650abecd54d6` | `ad69c91157f6705e8ab06c79fe08aad47bb57ba7` | `c916ab315fbe82a22169bff13d6b866e9fddc907461eb6b0a227b82acdf5b506` |
-| `fzerox-race` | `F-Zero X (USA).z64` | 16 MiB | `0b561fba` | `753437d0d8ada1d12f3f9cf0f0a5171f` | `5f658e88ffa9de23cba6986a8fd3d3a90d7b4340` | `2be0f861c30752bbdfa727753a454108bc973c27ad814744f191b1278c1f482d` |
-| `mk64-race` | `Mario Kart 64 (USA).z64` | 12 MiB | `434389c1` | `3a67d9986f54eb282924fca4cd5f6dff` | `579c48e211ae952530ffc8738709f078d5dd215e` | `d6b8538dd63f0132ecb2856e7d32816ed3c30e3e479aecd23cf83fb6ba17a5da` |
-| `goldeneye-dam` | `GoldenEye 007 (USA).z64` | 12 MiB | `b6330846` | `70c525880240c1e838b8b1be35666c3b` | `abe01e4aeb033b6c0836819f549c791b26cfde83` | `2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162` |
+| `sm64-demo` | `Super Mario 64 (USA).z64` | 8 MiB | `3ce60709` | `20b854b239203baf6c961b850a4a51a2` | `9bef1128717f958171a4afac3ed78ee2bb4e86ce` | `17ce077343c6133f8c9f2d6d6d9a4ab62c8cd2aa57c40aea1f490b4c8bb21d91` |
+| `oot-demo` | `Legend of Zelda, The - Ocarina of Time (USA).z64` | 32 MiB | `cd16c529` | `5bd1fe107bf8106b2ab6650abecd54d6` | `ad69c91157f6705e8ab06c79fe08aad47bb57ba7` | `c916ab315fbe82a22169bff13d6b866e9fddc907461eb6b0a227b82acdf5b506` |
+| `fzerox-demo` | `F-Zero X (USA).z64` | 16 MiB | `0b561fba` | `753437d0d8ada1d12f3f9cf0f0a5171f` | `5f658e88ffa9de23cba6986a8fd3d3a90d7b4340` | `2be0f861c30752bbdfa727753a454108bc973c27ad814744f191b1278c1f482d` |
+| `mk64-demo` | `Mario Kart 64 (USA).z64` | 12 MiB | `434389c1` | `3a67d9986f54eb282924fca4cd5f6dff` | `579c48e211ae952530ffc8738709f078d5dd215e` | `d6b8538dd63f0132ecb2856e7d32816ed3c30e3e479aecd23cf83fb6ba17a5da` |
+| `goldeneye-demo` | `GoldenEye 007 (USA).z64` | 12 MiB | `b6330846` | `70c525880240c1e838b8b1be35666c3b` | `abe01e4aeb033b6c0836819f549c791b26cfde83` | `2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162` |
 
 ### Reference Savestates
-Place the matching ReARMed savestates (`M64+SAVE` v1.6 — compatible with both ReARMed and ParaLLEl-N64) in `N64Bench.pak/states/`.
+The reference suite uses **zero-input built-in in-game attract demos**, ensuring Mupen64Plus-ReARMed and ParaLLEl-N64 render identical moving 3D gameplay with zero input drift between cores or frameskip modes.
+
+Place the matching ReARMed savestates (`M64+SAVE` v1.6 — compatible with both ReARMed and ParaLLEl-N64) in `N64Bench.pak/states/`:
 - If you receive `n64bench-states.tar.gz`, extract it inside `N64Bench.pak/` (`tar -xzf n64bench-states.tar.gz`), or drop `.st0.gz` files into `N64Bench.pak/states/` — `launch.sh` automatically decompresses any `.st0.gz` files on startup.
 - Any scenario whose ROM or savestate is missing is skipped automatically.
 

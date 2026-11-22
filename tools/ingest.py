@@ -19,10 +19,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 CANONICAL_NO_INTRO_SHA256: Dict[str, str] = {
+    "sm64-demo": "17ce077343c6133f8c9f2d6d6d9a4ab62c8cd2aa57c40aea1f490b4c8bb21d91",
     "sm64-bobomb": "17ce077343c6133f8c9f2d6d6d9a4ab62c8cd2aa57c40aea1f490b4c8bb21d91",
+    "oot-demo": "c916ab315fbe82a22169bff13d6b866e9fddc907461eb6b0a227b82acdf5b506",
     "oot-hyrule": "c916ab315fbe82a22169bff13d6b866e9fddc907461eb6b0a227b82acdf5b506",
+    "fzerox-demo": "2be0f861c30752bbdfa727753a454108bc973c27ad814744f191b1278c1f482d",
     "fzerox-race": "2be0f861c30752bbdfa727753a454108bc973c27ad814744f191b1278c1f482d",
+    "mk64-demo": "d6b8538dd63f0132ecb2856e7d32816ed3c30e3e479aecd23cf83fb6ba17a5da",
     "mk64-race": "d6b8538dd63f0132ecb2856e7d32816ed3c30e3e479aecd23cf83fb6ba17a5da",
+    "goldeneye-demo": "2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162",
     "goldeneye-dam": "2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162",
 }
 

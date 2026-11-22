@@ -55,12 +55,12 @@ CORE_PROFILES = [
     ("ReARMed · Glide64", "rearmed-glide64-240p", "rearmed-glide64-480p"),
 ]
 
-GAMES = [
-    ("goldeneye-dam", "GoldenEye 007", "30 FPS"),
-    ("sm64-bobomb", "Super Mario 64", "30 FPS"),
-    ("fzerox-race", "F-Zero X", "60 FPS"),
-    ("oot-hyrule", "Ocarina of Time", "20 FPS"),
-    ("mk64-race", "Mario Kart 64", "30 FPS"),
+GAME_SPECS = [
+    (("goldeneye-demo", "goldeneye-dam"), "GoldenEye 007", "30 FPS"),
+    (("sm64-demo", "sm64-bobomb"), "Super Mario 64", "30 FPS"),
+    (("fzerox-demo", "fzerox-race"), "F-Zero X", "60 FPS"),
+    (("oot-demo", "oot-hyrule"), "Ocarina of Time", "20 FPS"),
+    (("mk64-demo", "mk64-race"), "Mario Kart 64", "30 FPS"),
 ]
 
 
@@ -187,6 +187,19 @@ def get_run(runs: List[Dict[str, Any]], sid: str, pid: str, mode: str) -> Option
     for r in runs:
         if r.get("scenario_id") == sid and r.get("profile_id") == pid and r.get("mode") == mode:
             return r
+    return None
+
+
+def get_game_run(
+    runs: List[Dict[str, Any]],
+    sid_candidates: Sequence[str],
+    pid: str,
+    mode: str,
+) -> Optional[Dict[str, Any]]:
+    for sid in sid_candidates:
+        found = get_run(runs, sid, pid, mode)
+        if found is not None:
+            return found
     return None
 
 
@@ -505,12 +518,12 @@ def draw_heatmap_block(
 
     label_w = 178
     gap = 8
-    cols = len(GAMES)
+    cols = len(GAME_SPECS)
     cell_w = (w - 32 - label_w - gap * (cols - 1)) / cols
     grid_x0 = x0 + 16 + label_w
     col_hdr_y = y0 + 44
 
-    for c, (_, gname, gfps) in enumerate(GAMES):
+    for c, (_, gname, gfps) in enumerate(GAME_SPECS):
         cx = grid_x0 + c * (cell_w + gap) + cell_w / 2
         gb = draw.textbbox((0, 0), gname, font=f_col)
         draw.text((s(cx) - (gb[2] - gb[0]) // 2, s(col_hdr_y)), gname, font=f_col, fill=TEXT_MAIN)
@@ -518,24 +531,24 @@ def draw_heatmap_block(
         draw.text((s(cx) - (sb[2] - sb[0]) // 2, s(col_hdr_y + 16)), gfps, font=f_col_sub, fill=TEXT_DIM)
 
     grid_y0 = y0 + hdr_h + 36
-    col_best_240: Dict[str, float] = {}
-    for sid, _, _ in GAMES:
+    col_best_240: Dict[int, float] = {}
+    for c, (sids, _, _) in enumerate(GAME_SPECS):
         vals = [
             float(run["speed_pct"])
             for p in CORE_PROFILES
-            for run in [get_run(runs, sid, p[1], "uncapped")]
+            for run in [get_game_run(runs, sids, p[1], "uncapped")]
             if run is not None
         ]
-        col_best_240[sid] = max(vals) if vals else -1.0
+        col_best_240[c] = max(vals) if vals else -1.0
 
     for r_idx, (plabel, p240, p480) in enumerate(CORE_PROFILES):
         ry = grid_y0 + r_idx * row_h
         lb = draw.textbbox((0, 0), plabel, font=f_row)
         draw.text((s(x0 + 18), s(ry + (row_h - 6) / 2) - (lb[3] - lb[1]) // 2), plabel, font=f_row, fill=TEXT_MAIN)
 
-        for c, (sid, _, _) in enumerate(GAMES):
-            run240 = get_run(runs, sid, p240, "uncapped")
-            run480 = get_run(runs, sid, p480, "uncapped")
+        for c, (sids, _, _) in enumerate(GAME_SPECS):
+            run240 = get_game_run(runs, sids, p240, "uncapped")
+            run480 = get_game_run(runs, sids, p480, "uncapped")
             cx0 = grid_x0 + c * (cell_w + gap)
             cx1 = cx0 + cell_w
             mid_x = s((cx0 + cx1) / 2)
@@ -553,7 +566,7 @@ def draw_heatmap_block(
             r240 = float(run240["speed_pct"])
             r480 = float(run480["speed_pct"]) if run480 is not None else None
             bg, fg = heat_color(r240)
-            is_best = r240 == col_best_240[sid]
+            is_best = r240 == col_best_240[c]
             draw.rounded_rectangle(
                 [s(cx0), s(ry), s(cx1), s(ry + row_h - 6)],
                 radius=s(6),
@@ -636,7 +649,7 @@ def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> Non
         d_ge: List[float] = []
         d_sm: List[float] = []
         for p_idx, (_, p240, _) in enumerate(CORE_PROFILES):
-            r_ge = get_run(d["runs"], "goldeneye-dam", p240, "paced")
+            r_ge = get_game_run(d["runs"], ("goldeneye-demo", "goldeneye-dam"), p240, "paced")
             if r_ge is not None:
                 vi = float(r_ge.get("vi_fps_avg", 0.0))
                 d_ge.append(vi)
@@ -645,7 +658,7 @@ def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> Non
             else:
                 d_ge.append(0.0)
 
-            r_sm = get_run(d["runs"], "sm64-bobomb", p240, "paced")
+            r_sm = get_game_run(d["runs"], ("sm64-demo", "sm64-bobomb"), p240, "paced")
             d_sm.append(float(r_sm.get("missed_vsyncs", 0.0)) if r_sm is not None else 0.0)
         ge_vals.append(d_ge)
         sm_vals.append(d_sm)

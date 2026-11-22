@@ -1,66 +1,54 @@
 {
   "scenarios": [
     {
-      "id": "sm64-bobomb",
-      "name": "Super Mario 64 - Bob-Omb Battlefield",
+      "id": "sm64-demo",
+      "name": "Super Mario 64 - Attract Demo",
       "rom": "roms/Super Mario 64 (USA).zip",
-      "state": "states/sm64-bobomb.st0",
+      "state": "states/sm64-demo.st0",
       "target_game_fps": 30,
       "warmup_frames": 120,
       "paced_seconds": 15,
       "uncapped_seconds": 8,
-      "inputs": [
-        { "start": 0,   "end": 180, "lx": 0,   "ly": -28000, "buttons": [] },
-        { "start": 180, "end": 210, "lx": 0,   "ly": -28000, "buttons": ["B"] },
-        { "start": 210, "end": 420, "lx": 20000, "ly": -20000, "buttons": [] },
-        { "start": 420, "end": 900, "lx": -20000, "ly": -20000, "buttons": [] }
-      ]
+      "inputs": []
     },
     {
-      "id": "oot-hyrule",
-      "name": "Ocarina of Time - Hyrule Field",
+      "id": "oot-demo",
+      "name": "Ocarina of Time - Attract Demo",
       "rom": "roms/Legend of Zelda, The - Ocarina of Time (USA).zip",
-      "state": "states/oot-hyrule.st0",
+      "state": "states/oot-demo.st0",
       "target_game_fps": 20,
       "warmup_frames": 120,
       "paced_seconds": 15,
       "uncapped_seconds": 8,
-      "inputs": [
-        { "start": 0,   "end": 450, "lx": 0, "ly": -28000, "buttons": [] },
-        { "start": 450, "end": 900, "lx": 18000, "ly": -22000, "buttons": [] }
-      ]
+      "inputs": []
     },
     {
-      "id": "fzerox-race",
-      "name": "F-Zero X - Race (60 FPS Stress)",
+      "id": "fzerox-demo",
+      "name": "F-Zero X - Attract Demo (60 FPS)",
       "rom": "roms/F-Zero X (USA).zip",
-      "state": "states/fzerox-race.st0",
+      "state": "states/fzerox-demo.st0",
       "target_game_fps": 60,
       "warmup_frames": 120,
       "paced_seconds": 15,
       "uncapped_seconds": 8,
-      "inputs": [
-        { "start": 0, "end": 900, "lx": 0, "ly": 0, "buttons": ["B"] }
-      ]
+      "inputs": []
     },
     {
-      "id": "mk64-race",
-      "name": "Mario Kart 64 - Race",
+      "id": "mk64-demo",
+      "name": "Mario Kart 64 - Attract Demo",
       "rom": "roms/Mario Kart 64 (USA).zip",
-      "state": "states/mk64-race.st0",
+      "state": "states/mk64-demo.st0",
       "target_game_fps": 30,
       "warmup_frames": 120,
       "paced_seconds": 15,
       "uncapped_seconds": 8,
-      "inputs": [
-        { "start": 0, "end": 900, "lx": 0, "ly": 0, "buttons": ["B"] }
-      ]
+      "inputs": []
     },
     {
-      "id": "goldeneye-dam",
-      "name": "GoldenEye 007 - Dam",
+      "id": "goldeneye-demo",
+      "name": "GoldenEye 007 - Attract Demo",
       "rom": "roms/GoldenEye 007 (USA).zip",
-      "state": "states/goldeneye-dam.st0",
+      "state": "states/goldeneye-demo.st0",
       "target_game_fps": 30,
       "warmup_frames": 120,
       "paced_seconds": 15,
