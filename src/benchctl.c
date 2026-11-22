@@ -608,13 +608,37 @@ static void read_soc_model(char *out, size_t out_sz) {
 	snprintf(out, out_sz, "unknown");
 }
 
+static int try_read_version_file(const char *path, char *out, size_t out_sz) {
+	if (!path || !path[0]) return 0;
+	read_sysfs_line(path, out, out_sz, "");
+	return out[0] != '\0';
+}
+
 static void read_nextui_version(char *out, size_t out_sz) {
-	const char *sys_path = getenv("SYSTEM_PATH");
-	if (!sys_path || !sys_path[0]) sys_path = "/mnt/SDCARD/.system";
 	char ver_path[MAX_PATH_LEN];
-	snprintf(ver_path, sizeof(ver_path), "%s/version.txt", sys_path);
-	read_sysfs_line(ver_path, out, out_sz, "unknown");
-	if (!out[0]) snprintf(out, out_sz, "unknown");
+	const char *sys_path = getenv("SYSTEM_PATH");
+	if (sys_path && sys_path[0]) {
+		snprintf(ver_path, sizeof(ver_path), "%s/version.txt", sys_path);
+		if (try_read_version_file(ver_path, out, out_sz)) return;
+
+		/* NextUI exports SYSTEM_PATH=<sdcard>/.system/<platform>, while version.txt lives in .system/. */
+		const char *last_slash = strrchr(sys_path, '/');
+		if (last_slash && last_slash > sys_path) {
+			size_t parent_len = (size_t)(last_slash - sys_path);
+			if (parent_len + sizeof("/version.txt") < sizeof(ver_path)) {
+				memcpy(ver_path, sys_path, parent_len);
+				snprintf(ver_path + parent_len, sizeof(ver_path) - parent_len, "/version.txt");
+				if (try_read_version_file(ver_path, out, out_sz)) return;
+			}
+		}
+	}
+
+	const char *sd_path = getenv("SDCARD_PATH");
+	if (!sd_path || !sd_path[0]) sd_path = "/mnt/SDCARD";
+	snprintf(ver_path, sizeof(ver_path), "%s/.system/version.txt", sd_path);
+	if (try_read_version_file(ver_path, out, out_sz)) return;
+
+	snprintf(out, out_sz, "unknown");
 }
 
 static int read_int_sysfs(const char *path, int *out_val) {
