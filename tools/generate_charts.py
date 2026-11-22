@@ -55,12 +55,22 @@ CORE_PROFILES = [
     ("ReARMed · Glide64", "rearmed-glide64-240p", "rearmed-glide64-480p"),
 ]
 
-GAME_SPECS = [
-    (("goldeneye-demo", "goldeneye-dam"), "GoldenEye 007", "30 FPS"),
-    (("sm64-demo", "sm64-bobomb"), "Super Mario 64", "30 FPS"),
-    (("fzerox-demo", "fzerox-race"), "F-Zero X", "60 FPS"),
-    (("oot-demo", "oot-hyrule"), "Ocarina of Time", "20 FPS"),
-    (("mk64-demo", "mk64-race"), "Mario Kart 64", "30 FPS"),
+MAX_HEATMAP_COLS = 7
+HEATMAP_HDR_H = 42
+HEATMAP_STRIP_HDR_H = 36
+HEATMAP_ROW_H = 46
+HEATMAP_STRIP_GAP = 6
+HEATMAP_CARD_PAD_BOTTOM = 12
+HEATMAP_CARD_GAP = 18
+
+GAME_SPECS: List[Tuple[Tuple[str, ...], str, str, str]] = [
+    (("conker-demo",), "Conker", "Conker's Bad Fur Day", "30 FPS"),
+    (("goldeneye-demo", "goldeneye-dam"), "GoldenEye 007", "GoldenEye 007", "30 FPS"),
+    (("smash64-demo",), "Smash 64", "Super Smash Bros.", "60 FPS"),
+    (("sm64-demo", "sm64-bobomb"), "Super Mario 64", "Super Mario 64", "30 FPS"),
+    (("fzerox-demo", "fzerox-race"), "F-Zero X", "F-Zero X", "60 FPS"),
+    (("oot-demo", "oot-hyrule"), "Ocarina of Time", "Ocarina of Time", "20 FPS"),
+    (("mk64-demo", "mk64-race"), "Mario Kart 64", "Mario Kart 64", "30 FPS"),
 ]
 
 
@@ -482,6 +492,40 @@ def heat_color(pct: float) -> Tuple[str, str]:
     return "#0f533a", "#7ee787"
 
 
+def resolve_active_games(
+    devices: List[Dict[str, Any]],
+) -> List[Tuple[Tuple[str, ...], str, str, str]]:
+    seen_sids: set = set()
+    fps_by_sid: Dict[str, Any] = {}
+    for d in devices:
+        for r in d.get("runs", []):
+            sid = str(r.get("scenario_id") or "")
+            if sid:
+                seen_sids.add(sid)
+                if sid not in fps_by_sid and r.get("target_game_fps") is not None:
+                    fps_by_sid[sid] = r.get("target_game_fps")
+
+    active: List[Tuple[Tuple[str, ...], str, str, str]] = []
+    covered: set = set()
+    for spec in GAME_SPECS:
+        if any(sid in seen_sids for sid in spec[0]):
+            active.append(spec)
+            covered.update(spec[0])
+
+    for sid in sorted(seen_sids - covered):
+        fps_val = fps_by_sid.get(sid, 30)
+        fps_label = f"{int(fps_val)} FPS" if isinstance(fps_val, (int, float)) else "30 FPS"
+        active.append(((sid,), sid[:15], sid, fps_label))
+
+    return active or list(GAME_SPECS)
+
+
+def compute_heatmap_block_height(num_games: int) -> int:
+    strips = max(1, math.ceil(num_games / MAX_HEATMAP_COLS))
+    strip_h = HEATMAP_STRIP_HDR_H + HEATMAP_ROW_H * len(CORE_PROFILES)
+    return HEATMAP_HDR_H + strips * strip_h + max(0, strips - 1) * HEATMAP_STRIP_GAP + HEATMAP_CARD_PAD_BOTTOM
+
+
 def draw_heatmap_block(
     draw: ImageDraw.ImageDraw,
     x0: int,
@@ -490,10 +534,9 @@ def draw_heatmap_block(
     title: str,
     accent_color: str,
     runs: List[Dict[str, Any]],
+    active_games: Sequence[Tuple[Tuple[str, ...], str, str, str]],
 ) -> int:
-    row_h = 46
-    hdr_h = 42
-    block_h = hdr_h + 36 + row_h * len(CORE_PROFILES) + 12
+    block_h = compute_heatmap_block_height(len(active_games))
 
     draw.rounded_rectangle(
         [s(x0), s(y0), s(x0 + w), s(y0 + block_h)],
@@ -508,7 +551,6 @@ def draw_heatmap_block(
         fill=accent_color,
     )
     f_btitle = load_font(FONT_SANS_BOLD, 15)
-    f_col = load_font(FONT_SANS_BOLD, 12)
     f_col_sub = load_font(FONT_SANS_REG, 10)
     f_row = load_font(FONT_SANS_BOLD, 12.5)
     f_big = load_font(FONT_MONO_BOLD, 14)
@@ -516,79 +558,106 @@ def draw_heatmap_block(
 
     draw.text((s(x0 + 32), s(y0 + 13)), title, font=f_btitle, fill=TEXT_MAIN)
 
+    strips = [
+        active_games[i:i + MAX_HEATMAP_COLS]
+        for i in range(0, len(active_games), MAX_HEATMAP_COLS)
+    ]
+    cols_for_width = len(strips[0]) if len(strips) == 1 else MAX_HEATMAP_COLS
+    f_col = load_font(FONT_SANS_BOLD, 11 if cols_for_width > 5 else 12)
+
     label_w = 178
     gap = 8
-    cols = len(GAME_SPECS)
-    cell_w = (w - 32 - label_w - gap * (cols - 1)) / cols
+    cell_w = (w - 32 - label_w - gap * (cols_for_width - 1)) / cols_for_width
     grid_x0 = x0 + 16 + label_w
-    col_hdr_y = y0 + 44
+    strip_h = HEATMAP_STRIP_HDR_H + HEATMAP_ROW_H * len(CORE_PROFILES)
 
-    for c, (_, gname, gfps) in enumerate(GAME_SPECS):
-        cx = grid_x0 + c * (cell_w + gap) + cell_w / 2
-        gb = draw.textbbox((0, 0), gname, font=f_col)
-        draw.text((s(cx) - (gb[2] - gb[0]) // 2, s(col_hdr_y)), gname, font=f_col, fill=TEXT_MAIN)
-        sb = draw.textbbox((0, 0), gfps, font=f_col_sub)
-        draw.text((s(cx) - (sb[2] - sb[0]) // 2, s(col_hdr_y + 16)), gfps, font=f_col_sub, fill=TEXT_DIM)
+    for s_idx, strip_games in enumerate(strips):
+        strip_y0 = y0 + HEATMAP_HDR_H + s_idx * (strip_h + HEATMAP_STRIP_GAP)
+        col_hdr_y = strip_y0 + 2
 
-    grid_y0 = y0 + hdr_h + 36
-    col_best_240: Dict[int, float] = {}
-    for c, (sids, _, _) in enumerate(GAME_SPECS):
-        vals = [
-            float(run["speed_pct"])
-            for p in CORE_PROFILES
-            for run in [get_game_run(runs, sids, p[1], "uncapped")]
-            if run is not None
-        ]
-        col_best_240[c] = max(vals) if vals else -1.0
+        for c, (_, gshort, _, gfps) in enumerate(strip_games):
+            cx = grid_x0 + c * (cell_w + gap) + cell_w / 2
+            gb = draw.textbbox((0, 0), gshort, font=f_col)
+            draw.text((s(cx) - (gb[2] - gb[0]) // 2, s(col_hdr_y)), gshort, font=f_col, fill=TEXT_MAIN)
+            sb = draw.textbbox((0, 0), gfps, font=f_col_sub)
+            draw.text((s(cx) - (sb[2] - sb[0]) // 2, s(col_hdr_y + 16)), gfps, font=f_col_sub, fill=TEXT_DIM)
 
-    for r_idx, (plabel, p240, p480) in enumerate(CORE_PROFILES):
-        ry = grid_y0 + r_idx * row_h
-        lb = draw.textbbox((0, 0), plabel, font=f_row)
-        draw.text((s(x0 + 18), s(ry + (row_h - 6) / 2) - (lb[3] - lb[1]) // 2), plabel, font=f_row, fill=TEXT_MAIN)
+        grid_y0 = strip_y0 + HEATMAP_STRIP_HDR_H
+        col_best_240: Dict[int, float] = {}
+        for c, (sids, _, _, _) in enumerate(strip_games):
+            vals = [
+                float(run["speed_pct"])
+                for p in CORE_PROFILES
+                for run in [get_game_run(runs, sids, p[1], "uncapped")]
+                if run is not None
+            ]
+            col_best_240[c] = max(vals) if vals else -1.0
 
-        for c, (sids, _, _) in enumerate(GAME_SPECS):
-            run240 = get_game_run(runs, sids, p240, "uncapped")
-            run480 = get_game_run(runs, sids, p480, "uncapped")
-            cx0 = grid_x0 + c * (cell_w + gap)
-            cx1 = cx0 + cell_w
-            mid_x = s((cx0 + cx1) / 2)
-
-            if run240 is None:
-                draw.rounded_rectangle(
-                    [s(cx0), s(ry), s(cx1), s(ry + row_h - 6)],
-                    radius=s(6),
-                    fill="#1c2128",
-                )
-                mb = draw.textbbox((0, 0), "—", font=f_big)
-                draw.text((mid_x - (mb[2] - mb[0]) // 2, s(ry + 11)), "—", font=f_big, fill=TEXT_DIM)
-                continue
-
-            r240 = float(run240["speed_pct"])
-            r480 = float(run480["speed_pct"]) if run480 is not None else None
-            bg, fg = heat_color(r240)
-            is_best = r240 == col_best_240[c]
-            draw.rounded_rectangle(
-                [s(cx0), s(ry), s(cx1), s(ry + row_h - 6)],
-                radius=s(6),
-                fill=bg,
-                outline=TEXT_MAIN if is_best else None,
-                width=s(1.5) if is_best else 0,
+        for r_idx, (plabel, p240, p480) in enumerate(CORE_PROFILES):
+            ry = grid_y0 + r_idx * HEATMAP_ROW_H
+            lb = draw.textbbox((0, 0), plabel, font=f_row)
+            draw.text(
+                (s(x0 + 18), s(ry + (HEATMAP_ROW_H - 6) / 2) - (lb[3] - lb[1]) // 2),
+                plabel,
+                font=f_row,
+                fill=TEXT_MAIN,
             )
 
-            t_main = f"{r240:.0f}%"
-            t_sub = f"480p: {r480:.0f}%" if r480 is not None else "480p: —"
-            mb = draw.textbbox((0, 0), t_main, font=f_big)
-            sb = draw.textbbox((0, 0), t_sub, font=f_small)
-            draw.text((mid_x - (mb[2] - mb[0]) // 2, s(ry + 4)), t_main, font=f_big, fill=fg)
-            draw.text((mid_x - (sb[2] - sb[0]) // 2, s(ry + 23)), t_sub, font=f_small, fill=TEXT_MUTED)
+            for c, (sids, _, _, _) in enumerate(strip_games):
+                run240 = get_game_run(runs, sids, p240, "uncapped")
+                run480 = get_game_run(runs, sids, p480, "uncapped")
+                cx0 = grid_x0 + c * (cell_w + gap)
+                cx1 = cx0 + cell_w
+                mid_x = s((cx0 + cx1) / 2)
+
+                if run240 is None:
+                    draw.rounded_rectangle(
+                        [s(cx0), s(ry), s(cx1), s(ry + HEATMAP_ROW_H - 6)],
+                        radius=s(6),
+                        fill="#1c2128",
+                    )
+                    mb = draw.textbbox((0, 0), "—", font=f_big)
+                    draw.text((mid_x - (mb[2] - mb[0]) // 2, s(ry + 11)), "—", font=f_big, fill=TEXT_DIM)
+                    continue
+
+                r240 = float(run240["speed_pct"])
+                r480 = float(run480["speed_pct"]) if run480 is not None else None
+                bg, fg = heat_color(r240)
+                is_best = r240 == col_best_240[c]
+                draw.rounded_rectangle(
+                    [s(cx0), s(ry), s(cx1), s(ry + HEATMAP_ROW_H - 6)],
+                    radius=s(6),
+                    fill=bg,
+                    outline=TEXT_MAIN if is_best else None,
+                    width=s(1.5) if is_best else 0,
+                )
+
+                t_main = f"{r240:.0f}%"
+                t_sub = f"480p: {r480:.0f}%" if r480 is not None else "480p: —"
+                mb = draw.textbbox((0, 0), t_main, font=f_big)
+                sb = draw.textbbox((0, 0), t_sub, font=f_small)
+                draw.text((mid_x - (mb[2] - mb[0]) // 2, s(ry + 4)), t_main, font=f_big, fill=fg)
+                draw.text((mid_x - (sb[2] - sb[0]) // 2, s(ry + 23)), t_sub, font=f_small, fill=TEXT_MUTED)
 
     return block_h
 
 
 def chart_heatmap_all_games(devices: List[Dict[str, Any]], out_path: Path) -> None:
     width = 1180
-    block_h = 42 + 36 + 46 * len(CORE_PROFILES) + 12
-    height = 122 + len(devices) * (block_h + 18) + 6
+    active_games = resolve_active_games(devices)
+    legend_items = [
+        ("#5a1e24", "<100% (Too Slow)"),
+        ("#4c3614", "100–129% (Tight)"),
+        ("#143d4d", "130–174% (Good)"),
+        ("#144234", "175–219% (Fast)"),
+        ("#0f533a", "220%+ (Blazing)"),
+    ]
+    img_tmp, draw_tmp = new_canvas(width, 200)
+    leg_h = draw_legend(draw_tmp, 32, 92, width, legend_items)
+    cur_y0 = 92 + leg_h + 10
+
+    block_h = compute_heatmap_block_height(len(active_games))
+    height = cur_y0 + len(devices) * block_h + max(0, len(devices) - 1) * HEATMAP_CARD_GAP + 28
     img, draw = new_canvas(width, height)
     draw_header(
         draw,
@@ -596,25 +665,44 @@ def chart_heatmap_all_games(devices: List[Dict[str, Any]], out_path: Path) -> No
         "All Games Uncapped Speed Matrix — 320×240 (Primary) & 640×480 (Secondary)",
         "Every game's raw headroom on one screen. White border highlights the fastest renderer per game on each device.",
     )
-    draw_legend(
-        draw,
-        32,
-        92,
-        width,
-        [
-            ("#5a1e24", "<100% (Too Slow)"),
-            ("#4c3614", "100–129% (Tight)"),
-            ("#143d4d", "130–174% (Good)"),
-            ("#144234", "175–219% (Fast)"),
-            ("#0f533a", "220%+ (Blazing)"),
-        ],
-    )
+    draw_legend(draw, 32, 92, width, legend_items)
 
-    cur_y = 122
+    cur_y = cur_y0
     for d in devices:
-        bh = draw_heatmap_block(draw, 32, cur_y, width - 64, d["label"], d["color"], d["runs"])
-        cur_y += bh + 18
+        bh = draw_heatmap_block(draw, 32, cur_y, width - 64, d["label"], d["color"], d["runs"], active_games)
+        cur_y += bh + HEATMAP_CARD_GAP
     finish_canvas(img, out_path)
+
+
+def select_stress_games(
+    devices: List[Dict[str, Any]],
+    active_games: Sequence[Tuple[Tuple[str, ...], str, str, str]],
+) -> Tuple[Tuple[Tuple[str, ...], str, str, str], Tuple[Tuple[str, ...], str, str, str]]:
+    ranked: List[Tuple[float, int, Tuple[Tuple[str, ...], str, str, str]]] = []
+    for idx, spec in enumerate(active_games):
+        sids = set(spec[0])
+        uncapped = [
+            float(r["speed_pct"])
+            for d in devices
+            for r in d.get("runs", [])
+            if r.get("scenario_id") in sids and r.get("mode") == "uncapped" and r.get("speed_pct") is not None
+        ]
+        if uncapped:
+            score = sum(uncapped) / len(uncapped)
+        else:
+            paced = [
+                float(r["speed_pct"])
+                for d in devices
+                for r in d.get("runs", [])
+                if r.get("scenario_id") in sids and r.get("mode") == "paced" and r.get("speed_pct") is not None
+            ]
+            score = sum(paced) / len(paced) if paced else float("inf")
+        ranked.append((score, idx, spec))
+
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    first = ranked[0][2]
+    second = ranked[1][2] if len(ranked) > 1 else first
+    return first, second
 
 
 def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> None:
@@ -622,6 +710,11 @@ def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> Non
     n_dev = len(devices)
     row_h = max(48, 22 + n_dev * 16)
     panel_h = 78 + 34 + row_h * len(CORE_PROFILES)
+
+    active_games = resolve_active_games(devices)
+    stress_1, stress_2 = select_stress_games(devices, active_games)
+    s1_ids, _, s1_full, _ = stress_1
+    s2_ids, _, s2_full, _ = stress_2
 
     img_tmp, draw_tmp = new_canvas(width, 200)
     legend_items = [(d["color"], d["short_label"]) for d in devices] + [
@@ -635,36 +728,36 @@ def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> Non
     draw_header(
         draw,
         width,
-        "Real-Gameplay Stress Spotlight: GoldenEye 007 & Super Mario 64",
-        "VSync ON (paced 60 Hz gameplay @ 320×240). Highlights per-game pacing regressions and frame-time spikes.",
+        f"Real-Gameplay Stress Spotlight: {s1_full} & {s2_full}",
+        "VSync ON (paced 60 Hz gameplay @ 320×240). Highlights the most demanding games' pacing regressions and frame-time spikes.",
     )
     draw_legend(draw, 32, 92, width, legend_items)
 
     labels = [p[0] for p in CORE_PROFILES]
-    ge_vals: List[List[float]] = []
-    ge_annots: Dict[Tuple[int, int], str] = {}
-    sm_vals: List[List[float]] = []
+    g1_vals: List[List[float]] = []
+    g1_annots: Dict[Tuple[int, int], str] = {}
+    g2_vals: List[List[float]] = []
 
     for d_idx, d in enumerate(devices):
-        d_ge: List[float] = []
-        d_sm: List[float] = []
+        d_g1: List[float] = []
+        d_g2: List[float] = []
         for p_idx, (_, p240, _) in enumerate(CORE_PROFILES):
-            r_ge = get_game_run(d["runs"], ("goldeneye-demo", "goldeneye-dam"), p240, "paced")
-            if r_ge is not None:
-                vi = float(r_ge.get("vi_fps_avg", 0.0))
-                d_ge.append(vi)
-                if vi <= 52.0 and float(r_ge.get("frame_ms_max", 0.0)) >= 65.0:
-                    ge_annots[(d_idx, p_idx)] = f"({float(r_ge['frame_ms_max']):.0f}ms)"
+            r_g1 = get_game_run(d["runs"], s1_ids, p240, "paced")
+            if r_g1 is not None:
+                vi = float(r_g1.get("vi_fps_avg", 0.0))
+                d_g1.append(vi)
+                if vi <= 52.0 and float(r_g1.get("frame_ms_max", 0.0)) >= 65.0:
+                    g1_annots[(d_idx, p_idx)] = f"({float(r_g1['frame_ms_max']):.0f}ms)"
             else:
-                d_ge.append(0.0)
+                d_g1.append(0.0)
 
-            r_sm = get_game_run(d["runs"], ("sm64-demo", "sm64-bobomb"), p240, "paced")
-            d_sm.append(float(r_sm.get("missed_vsyncs", 0.0)) if r_sm is not None else 0.0)
-        ge_vals.append(d_ge)
-        sm_vals.append(d_sm)
+            r_g2 = get_game_run(d["runs"], s2_ids, p240, "paced")
+            d_g2.append(float(r_g2.get("missed_vsyncs", 0.0)) if r_g2 is not None else 0.0)
+        g1_vals.append(d_g1)
+        g2_vals.append(d_g2)
 
     colors = [d["color"] for d in devices]
-    sm_max, sm_ticks = compute_axis_scale(sm_vals, 400.0, 100)
+    g2_max, g2_ticks = compute_axis_scale(g2_vals, 400.0, 100)
 
     panel_w = 548
     draw_grouped_barh_panel(
@@ -673,10 +766,10 @@ def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> Non
         panel_y0,
         panel_w,
         panel_h,
-        "GoldenEye 007 — Real Gameplay Paced VI FPS",
+        f"{s1_full} — Real Gameplay Paced VI FPS",
         "Higher is better (60 = full speed) · Red marks severe pacing drops",
         labels,
-        ge_vals,
+        g1_vals,
         colors,
         68,
         [0, 15, 30, 45, 60],
@@ -685,7 +778,7 @@ def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> Non
         ref_label="60 Full",
         warn_thresh=52.0,
         lower_is_better=False,
-        annotations=ge_annots,
+        annotations=g1_annots,
     )
     draw_grouped_barh_panel(
         draw,
@@ -693,13 +786,13 @@ def chart_stress_spotlight(devices: List[Dict[str, Any]], out_path: Path) -> Non
         panel_y0,
         panel_w,
         panel_h,
-        "Super Mario 64 — Paced Missed VSyncs",
+        f"{s2_full} — Paced Missed VSyncs",
         "Lower is better · Exposes GPU flip and shader compilation stutter",
         labels,
-        sm_vals,
+        g2_vals,
         colors,
-        sm_max,
-        sm_ticks,
+        g2_max,
+        g2_ticks,
         lambda v: f"{int(round(v))}",
         warn_thresh=200,
         lower_is_better=True,

@@ -34,6 +34,10 @@ Savestates are region- and revision-sensitive. Use the following uncompressed No
 | `fzerox-demo` | `F-Zero X (USA).z64` | 16 MiB | `0b561fba` | `753437d0d8ada1d12f3f9cf0f0a5171f` | `5f658e88ffa9de23cba6986a8fd3d3a90d7b4340` | `2be0f861c30752bbdfa727753a454108bc973c27ad814744f191b1278c1f482d` |
 | `mk64-demo` | `Mario Kart 64 (USA).z64` | 12 MiB | `434389c1` | `3a67d9986f54eb282924fca4cd5f6dff` | `579c48e211ae952530ffc8738709f078d5dd215e` | `d6b8538dd63f0132ecb2856e7d32816ed3c30e3e479aecd23cf83fb6ba17a5da` |
 | `goldeneye-demo` | `GoldenEye 007 (USA).z64` | 12 MiB | `b6330846` | `70c525880240c1e838b8b1be35666c3b` | `abe01e4aeb033b6c0836819f549c791b26cfde83` | `2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162` |
+| `smash64-demo` | `Super Smash Bros. (USA).z64` | 16 MiB | `eb97929e` | `f7c52568a31aadf26e14dc2b6416b2ed` | `e2929e10fccc0aa84e5776227e798abc07cedabf` | — |
+| `conker-demo` | `Conker's Bad Fur Day (USA).z64` | 64 MiB | `ce8cc172` | `00e2920665f2329b95797a7eaabc2390` | `4cbadd3c4e0729dec46af64ad018050eada4f47a` | `32e6a8b970ec12ac5f782344945aa0c98a193832eefb687529d03bab6948714b` |
+
+> **SHA-256 note:** `conker-demo` canonical `.z64` SHA-256 is `32e6a8b970ec12ac5f782344945aa0c98a193832eefb687529d03bab6948714b`; `smash64-demo` hash verification is skipped automatically until a canonical SHA-256 is recorded.
 
 ### Reference Savestates
 The reference suite uses **zero-input built-in in-game attract demos**, ensuring Mupen64Plus-ReARMed and ParaLLEl-N64 render identical moving 3D gameplay with zero input drift between cores or frameskip modes.

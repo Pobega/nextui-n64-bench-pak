@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-CANONICAL_NO_INTRO_SHA256: Dict[str, str] = {
+CANONICAL_NO_INTRO_SHA256: Dict[str, Optional[str]] = {
     "sm64-demo": "17ce077343c6133f8c9f2d6d6d9a4ab62c8cd2aa57c40aea1f490b4c8bb21d91",
     "sm64-bobomb": "17ce077343c6133f8c9f2d6d6d9a4ab62c8cd2aa57c40aea1f490b4c8bb21d91",
     "oot-demo": "c916ab315fbe82a22169bff13d6b866e9fddc907461eb6b0a227b82acdf5b506",
@@ -29,6 +29,8 @@ CANONICAL_NO_INTRO_SHA256: Dict[str, str] = {
     "mk64-race": "d6b8538dd63f0132ecb2856e7d32816ed3c30e3e479aecd23cf83fb6ba17a5da",
     "goldeneye-demo": "2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162",
     "goldeneye-dam": "2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162",
+    "smash64-demo": None,
+    "conker-demo": "32e6a8b970ec12ac5f782344945aa0c98a193832eefb687529d03bab6948714b",
 }
 
 SUPPORTED_SCHEMAS = (1, 2)
@@ -139,6 +141,7 @@ def evaluate_submission(summary_path: Path) -> Dict[str, Any]:
     peak_temp = max(temps) if temps else -1.0
 
     rom_hashes_present = 0
+    rom_hashes_checked = 0
     rom_hashes_matched = 0
     rom_hashes_mismatched = 0
     for r in runs:
@@ -148,19 +151,27 @@ def evaluate_submission(summary_path: Path) -> Dict[str, Any]:
             continue
         rom_hashes_present += 1
         expected = CANONICAL_NO_INTRO_SHA256.get(sid)
-        if expected and r_hash == expected:
+        if expected is None:
+            continue
+        rom_hashes_checked += 1
+        if r_hash == expected:
             rom_hashes_matched += 1
-        elif expected:
+        else:
             rom_hashes_mismatched += 1
 
     if rom_hashes_present == 0:
         hash_status = "unverified (schema v1)" if schema == 1 else "unverified (no rom_sha256)"
         is_hash_mismatch = False
+    elif rom_hashes_checked == 0:
+        hash_status = "unverified (no canonical sha256 configured)"
+        is_hash_mismatch = False
     elif rom_hashes_mismatched > 0:
-        hash_status = f"mismatch ({rom_hashes_matched}/{rom_hashes_present} canonical)"
+        hash_status = f"mismatch ({rom_hashes_matched}/{rom_hashes_checked} canonical)"
         is_hash_mismatch = True
     else:
-        hash_status = f"verified ({rom_hashes_matched}/{rom_hashes_present})"
+        unconfigured = rom_hashes_present - rom_hashes_checked
+        suffix = f", {unconfigured} unconfigured" if unconfigured > 0 else ""
+        hash_status = f"verified ({rom_hashes_matched}/{rom_hashes_checked}{suffix})"
         is_hash_mismatch = False
 
     return {

@@ -54,6 +54,28 @@
       "paced_seconds": 15,
       "uncapped_seconds": 8,
       "inputs": []
+    },
+    {
+      "id": "smash64-demo",
+      "name": "Super Smash Bros. - Attract Demo (60 FPS)",
+      "rom": "roms/Super Smash Bros. (USA).zip",
+      "state": "states/smash64-demo.st0",
+      "target_game_fps": 60,
+      "warmup_frames": 120,
+      "paced_seconds": 15,
+      "uncapped_seconds": 8,
+      "inputs": []
+    },
+    {
+      "id": "conker-demo",
+      "name": "Conker's Bad Fur Day - Attract Demo",
+      "rom": "roms/Conker's Bad Fur Day (USA).zip",
+      "state": "states/conker-demo.st0",
+      "target_game_fps": 30,
+      "warmup_frames": 120,
+      "paced_seconds": 15,
+      "uncapped_seconds": 8,
+      "inputs": []
     }
   ]
 }
