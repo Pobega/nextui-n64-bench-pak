@@ -4,7 +4,7 @@
   "description": "Automated Nintendo 64 performance benchmark suite for NextUI comparing Mupen64Plus-ReARMed and ParaLLEl-N64 across renderers, resolutions, and frameskip settings",
   "author": "Pobega",
   "repo_url": "https://github.com/Pobega/nextui-n64-bench-pak",
-  "release_filename": "N64Bench.pak.zip",
+  "release_filename": "N64Bench.zip",
   "platforms": [
     "tg5040",
     "tg5050",

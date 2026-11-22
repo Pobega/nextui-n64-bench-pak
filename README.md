@@ -13,17 +13,13 @@ Automated, repeatable Nintendo 64 performance benchmark suite for **NextUI** (`t
 
 ## Installing
 
-### Option A: Manual SD Card Install (Recommended for Testers)
-1. Download **`N64Bench-manual.zip`** from [Releases](https://github.com/Pobega/nextui-n64-bench-pak/releases).
+1. Download **`N64Bench.zip`** from [Releases](https://github.com/Pobega/nextui-n64-bench-pak/releases).
 2. Extract it into `/mnt/SDCARD/Tools/<platform>/` on your SD card, matching your device platform:
    - `tg5040` — TrimUI Brick / TrimUI Smart Pro
    - `tg5050` — TrimUI Smart Pro S (TG5050)
    - `h700` — Anbernic H700 devices (RG35XX Plus / SP / H / 2024, RG40XX H / V, RGCubeXX)
 3. Verify the launcher sits at:
    `/mnt/SDCARD/Tools/<platform>/N64Bench.pak/launch.sh`
-
-### Option B: NextUI Pak Store
-Install **N64Bench** from the NextUI Pak Store (`N64Bench.pak.zip`, root-level archive layout matching `pak.json`).
 
 ## Where ROMs Go & Expected Hashes
 

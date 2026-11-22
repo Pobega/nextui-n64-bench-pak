@@ -163,9 +163,9 @@ build-cores: $(foreach p,$(PLATFORMS),cores-$(p))
 build: build-minarch build-benchctl build-ui build-cores
 
 package:
-	@echo "Packaging $(PAK_NAME).pak.zip, $(PAK_NAME)-manual.zip, and platform tool distributions..."
+	@echo "Packaging $(PAK_NAME).zip and platform tool distributions..."
 	@mkdir -p $(DIST_DIR)
-	@rm -rf $(BUILD_DIR)/staging $(DIST_DIR)/$(PAK_NAME).pak.zip $(DIST_DIR)/$(PAK_NAME)-manual.zip $(DIST_DIR)/SHA256SUMS.txt
+	@rm -rf $(BUILD_DIR)/staging $(DIST_DIR)/$(PAK_NAME).zip $(DIST_DIR)/$(PAK_NAME).pak.zip $(DIST_DIR)/$(PAK_NAME)-manual.zip $(DIST_DIR)/SHA256SUMS.txt
 	@mkdir -p $(BUILD_DIR)/staging/$(PAK_NAME).pak/config $(BUILD_DIR)/staging/$(PAK_NAME).pak/roms $(BUILD_DIR)/staging/$(PAK_NAME).pak/states $(BUILD_DIR)/staging/$(PAK_NAME).pak/inputs
 	@cp pak.json launch.sh LICENSE README.md $(BUILD_DIR)/staging/$(PAK_NAME).pak/
 	@chmod 0755 $(BUILD_DIR)/staging/$(PAK_NAME).pak/launch.sh
@@ -192,10 +192,9 @@ package:
 		cp $(BIN_DIR)/$$p/minarch-bench.elf $(BIN_DIR)/$$p/benchctl $(BIN_DIR)/$$p/minui-list $(BIN_DIR)/$$p/minui-presenter $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/bin/$$p/; \
 		cp $(CORES_DIR)/$$p/*.so $(DIST_DIR)/Tools/$$p/$(PAK_NAME).pak/cores/$$p/; \
 	done
-	@cd $(BUILD_DIR)/staging/$(PAK_NAME).pak && zip -r $(DIST_DIR)/$(PAK_NAME).pak.zip .
-	@cd $(BUILD_DIR)/staging && zip -r $(DIST_DIR)/$(PAK_NAME)-manual.zip $(PAK_NAME).pak
-	@cd $(DIST_DIR) && sha256sum $(PAK_NAME).pak.zip $(PAK_NAME)-manual.zip > SHA256SUMS.txt
-	@echo "Successfully packaged $(DIST_DIR)/$(PAK_NAME).pak.zip and $(DIST_DIR)/$(PAK_NAME)-manual.zip"
+	@cd $(BUILD_DIR)/staging && zip -r $(DIST_DIR)/$(PAK_NAME).zip $(PAK_NAME).pak
+	@cd $(DIST_DIR) && sha256sum $(PAK_NAME).zip > SHA256SUMS.txt
+	@echo "Successfully packaged $(DIST_DIR)/$(PAK_NAME).zip"
 
 states-pack:
 	@mkdir -p $(DIST_DIR)
