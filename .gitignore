@@ -1,6 +1,10 @@
 build/
 dist/
 results/
+results_*/
+report/
+report_*/
+submissions/
 roms/*
 !roms/.gitkeep
 states/*
