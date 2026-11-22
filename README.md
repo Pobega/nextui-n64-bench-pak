@@ -36,7 +36,6 @@ Savestates are region- and revision-sensitive. Use the following uncompressed No
 | `goldeneye-demo` | `GoldenEye 007 (USA).z64` | 12 MiB | `b6330846` | `70c525880240c1e838b8b1be35666c3b` | `abe01e4aeb033b6c0836819f549c791b26cfde83` | `2cdcec8a9f0cb6e36337f3ee39d8ad105dc8afa6ba1c02d466e8f5b771f9a162` |
 | `conker-demo` | `Conker's Bad Fur Day (USA).z64` | 64 MiB | `ce8cc172` | `00e2920665f2329b95797a7eaabc2390` | `4cbadd3c4e0729dec46af64ad018050eada4f47a` | `32e6a8b970ec12ac5f782344945aa0c98a193832eefb687529d03bab6948714b` |
 
-
 ### Reference Savestates
 The reference suite uses **zero-input built-in in-game attract demos**, ensuring Mupen64Plus-ReARMed and ParaLLEl-N64 render identical moving 3D gameplay with zero input drift between cores or frameskip modes.
 
@@ -49,18 +48,10 @@ Place the matching ReARMed savestates (`M64+SAVE` v1.6 — compatible with both 
 ## Running Benchmarks On-Device
 
 1. Launch **N64Bench** from NextUI's **Tools** menu.
-2. Run **Check Setup / Preflight** to confirm ROMs found, savestates found, recorded inputs, SoC model, NextUI version, and battery level.
+2. Run **Check Setup / Preflight** to confirm ROMs found, savestates found, SoC model, NextUI version, and battery level.
 3. Select **Run Benchmark Tier (Recommended)** -> **Community Standard (10 Profiles, 240p+480p)** for standardized cross-device submissions (compares all 5 renderer/core profiles at both `320x240` and `640x480` in `paced` and `uncapped` modes).
    - Keep your handheld plugged in or above 50% battery before starting.
    - Hold **MENU** during any run to abort cleanly.
-
-### Recording Custom Scenario Inputs
-Select **Record Scenario Inputs** from the main menu to play any scenario live on your handheld using `rearmed-rice-240p`:
-- After the 2-second warmup, real controls are captured frame-by-frame (buttons + left/right analog sticks) for up to 30 seconds (covering both paced and uncapped runs cleanly).
-- Hold **MENU** anytime after 1 second to stop early and save atomically to `N64Bench.pak/inputs/<scenario_id>.inp`.
-- **Stickless handhelds (`Record D-Pad -> Analog`)**: automatically defaults to `on` on stickless devices (TrimUI Brick, Anbernic RG35XXSP/Plus, etc.) and `off` on sticked devices. When `on`, D-Pad directions are translated into real `lx`/`ly` analog stick values so `.inp` recordings replay identically across both ReARMed and ParaLLEl-N64.
-- **Custom button bindings (`Configure Record Controls`)**: launches an interactive test session using `config/record_controls.cfg`; press **MENU -> Controls** to remap buttons, **Save** (for console or game), and **Quit** when done.
-- Whenever `inputs/<scenario_id>.inp` exists, `benchctl plan` automatically replays it instead of the inline JSON script in `config/scenarios.json`, and `make package` includes any `.inp` files in `inputs/` cleanly inside release bundles.
 
 ## Submitting Results
 

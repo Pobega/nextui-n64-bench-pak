@@ -40,44 +40,6 @@ TAB="$(printf '\t')"
 MODE="both"
 DEV_TAG="${DEVICE:-$PLATFORM}"
 
-default_dpad_analog() {
-	dev_lc="$(printf '%s' "$DEVICE" | tr '[:upper:]' '[:lower:]')"
-	case "$dev_lc" in
-		brick|rgsp|rg35xxsp|rg35xxplus|rg35xx|rg28xx)
-			printf 'on\n'
-			;;
-		smartpro|smartpros|rg35xxh|rg40xxh|rg40xxv|rgcubexx)
-			printf 'off\n'
-			;;
-		"")
-			case "$PLATFORM" in
-				h700|tg5040) printf 'on\n' ;;
-				*)           printf 'off\n' ;;
-			esac
-			;;
-		*)
-			printf 'off\n'
-			;;
-	esac
-}
-
-dpad_analog_flag() {
-	if [ "$DPAD_ANALOG" = "on" ]; then
-		printf '1\n'
-	else
-		printf '0\n'
-	fi
-}
-
-toggle_dpad_analog() {
-	if [ "$DPAD_ANALOG" = "on" ]; then
-		DPAD_ANALOG="off"
-	else
-		DPAD_ANALOG="on"
-	fi
-}
-
-DPAD_ANALOG="$(default_dpad_analog)"
 PAK_VERSION="unknown"
 if [ -f "$PAK_JSON" ]; then
 	parsed_ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PAK_JSON" | head -n 1)"
@@ -199,7 +161,6 @@ run_preflight_check() {
 	r_total="$(preflight_field "$pf_out" "ROMS_TOTAL")"
 	s_found="$(preflight_field "$pf_out" "STATES_FOUND")"
 	s_total="$(preflight_field "$pf_out" "STATES_TOTAL")"
-	rec_cnt="$(preflight_field "$pf_out" "RECORDED_INPUTS")"
 	bat_pct="$(preflight_field "$pf_out" "BATTERY_PCT")"
 	soc_mod="$(preflight_field "$pf_out" "SOC_MODEL")"
 	next_ver="$(preflight_field "$pf_out" "NEXTUI_VERSION")"
@@ -208,7 +169,7 @@ run_preflight_check() {
 	[ -z "$bat_pct" ] && bat_pct="$(read_battery_pct)"
 	bat_line="$(format_battery_line "$bat_pct")"
 
-	PF_MSG="Device: $DEV_TAG ($PLATFORM)\nSoC: ${soc_mod:-unknown}\nNextUI: ${next_ver:-unknown} | Pak v${PAK_VERSION}\nROMs: ${r_found:-0}/${r_total:-0} | States: ${s_found:-0}/${s_total:-0}\nRecorded inputs: ${rec_cnt:-0}/${r_total:-0}\n$bat_line"
+	PF_MSG="Device: $DEV_TAG ($PLATFORM)\nSoC: ${soc_mod:-unknown}\nNextUI: ${next_ver:-unknown} | Pak v${PAK_VERSION}\nROMs: ${r_found:-0}/${r_total:-0} | States: ${s_found:-0}/${s_total:-0}\n$bat_line"
 	if [ -n "$missing" ]; then
 		PF_MSG="$PF_MSG\nMissing: $missing"
 	fi
@@ -424,93 +385,6 @@ pick_scenario() {
 	[ -n "$SEL_ID" ] && execute_plan "scenario" "$SEL_ID" "$SEL_NAME"
 }
 
-record_scenario() {
-	"$BENCHCTL" list-scenarios "$SCENARIOS_JSON" "$PAK_DIR" "$SUB_JSON" > "$SUB_TSV"
-	minui-list --disable-auto-sleep --file "$SUB_JSON" --format json --title "Record Scenario Inputs" --confirm-text "RECORD" --write-location "$SUB_OUT" >/dev/null
-	[ $? -eq 0 ] && [ -f "$SUB_OUT" ] || return
-	SEL_NAME="$(cat "$SUB_OUT")"
-	SEL_ID="$(lookup_id_by_name "$SUB_TSV" "$SEL_NAME")"
-	[ -n "$SEL_ID" ] || return
-
-	REC_INFO="$("$BENCHCTL" record-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$SEL_ID" "$WORK_DIR" 2>"$WORK_DIR/record.err")"
-	if [ $? -ne 0 ] || [ -z "$REC_INFO" ]; then
-		ERR_MSG="$(cat "$WORK_DIR/record.err" 2>/dev/null)"
-		show_msg "Cannot record '$SEL_ID':\n\n${ERR_MSG:-Missing ROM, savestate, or core.}"
-		return 1
-	fi
-
-	REC_NAME="$(preflight_field "$REC_INFO" "SCENARIO_NAME")"
-	REC_ROM="$(preflight_field "$REC_INFO" "ROM_PATH")"
-	REC_STATE="$(preflight_field "$REC_INFO" "STATE_PATH")"
-	REC_CORE="$(preflight_field "$REC_INFO" "CORE_PATH")"
-	REC_CFG="$(preflight_field "$REC_INFO" "CFG_PATH")"
-	REC_WARMUP="$(preflight_field "$REC_INFO" "WARMUP")"
-	OUT_INPUT="$(preflight_field "$REC_INFO" "OUT_INPUT")"
-
-	mkdir -p "$PAK_DIR/inputs"
-
-	REC_PROMPT="Record inputs for ${REC_NAME:-$SEL_ID}\nD-Pad -> Analog: $DPAD_ANALOG\n\n1. Wait through the 2s warmup\n2. Play normally for 30s\n3. Hold MENU anytime after 1s to stop & save early\n\nSaves to: inputs/${SEL_ID}.inp"
-	if ! confirm_msg "$REC_PROMPT"; then
-		return 0
-	fi
-
-	BENCH_ENABLE=1 \
-	BENCH_TAG="N64" \
-	BENCH_MODE="record" \
-	BENCH_DPAD_TO_ANALOG="$(dpad_analog_flag)" \
-	BENCH_CFG_PATH="$REC_CFG" \
-	BENCH_STATE_PATH="$REC_STATE" \
-	BENCH_WARMUP_FRAMES="${REC_WARMUP:-120}" \
-	BENCH_DURATION_SEC="30" \
-	BENCH_LABEL="REC: $SEL_ID" \
-	BENCH_OUT_INPUT="$OUT_INPUT" \
-	"$MINARCH_BENCH" "$REC_CORE" "$REC_ROM"
-	RC=$?
-
-	if [ "$RC" -eq 0 ] && [ -f "$OUT_INPUT" ]; then
-		STEP_CNT="$(grep -cv '^[[:space:]]*#' "$OUT_INPUT" 2>/dev/null || echo 0)"
-		show_msg "Input Recording Saved!\n\nFile: inputs/${SEL_ID}.inp\nSteps: $STEP_CNT\n\nFuture benchmarks of '$SEL_ID' will replay this recording automatically."
-	elif [ "$RC" -eq 2 ]; then
-		show_msg "Recording failed: could not load savestate for $SEL_ID."
-	elif [ "$RC" -eq 42 ]; then
-		show_msg "Recording canceled before 1s; existing inputs (if any) kept unchanged."
-	else
-		show_msg "Recording exited with code $RC."
-	fi
-}
-
-configure_record_controls() {
-	REC_INFO="$("$BENCHCTL" record-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "auto" "$WORK_DIR" 2>"$WORK_DIR/record.err")"
-	if [ $? -ne 0 ] || [ -z "$REC_INFO" ]; then
-		ERR_MSG="$(cat "$WORK_DIR/record.err" 2>/dev/null)"
-		show_msg "Cannot open control setup:\n\n${ERR_MSG:-No runnable N64 scenario found (need at least 1 ROM + savestate).}"
-		return 1
-	fi
-
-	REC_NAME="$(preflight_field "$REC_INFO" "SCENARIO_NAME")"
-	REC_ROM="$(preflight_field "$REC_INFO" "ROM_PATH")"
-	REC_STATE="$(preflight_field "$REC_INFO" "STATE_PATH")"
-	REC_CORE="$(preflight_field "$REC_INFO" "CORE_PATH")"
-	CONTROLS_CFG="$(preflight_field "$REC_INFO" "CONTROLS_CFG")"
-	[ -n "$CONTROLS_CFG" ] || CONTROLS_CFG="$PAK_DIR/config/record_controls.cfg"
-
-	mkdir -p "$PAK_DIR/config"
-
-	CFG_PROMPT="Configure Record Controls\nTest game: ${REC_NAME:-N64}\nD-Pad -> Analog: $DPAD_ANALOG\n\n1. Press MENU -> Controls to remap & test live\n2. Select Save (for console or game) to update config/record_controls.cfg\n3. Select Quit when done"
-	if ! confirm_msg "$CFG_PROMPT"; then
-		return 0
-	fi
-
-	BENCH_ENABLE=1 \
-	BENCH_TAG="N64" \
-	BENCH_MODE="config" \
-	BENCH_DPAD_TO_ANALOG="$(dpad_analog_flag)" \
-	BENCH_CFG_PATH="$CONTROLS_CFG" \
-	BENCH_STATE_PATH="$REC_STATE" \
-	BENCH_LABEL="Configure Controls" \
-	"$MINARCH_BENCH" "$REC_CORE" "$REC_ROM"
-}
-
 generate_missing_states() {
 	rm -f "$GEN_TSV"
 	GEN_INFO="$("$BENCHCTL" genstate-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "missing" "$WORK_DIR" "$GEN_TSV" 2>"$WORK_DIR/genstate.err")"
@@ -611,7 +485,7 @@ cycle_mode() {
 
 while true; do
 	cat > "$MENU_JSON" <<EOF
-["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Generate Missing Savestates (Auto)","Capture State / Find Frame","Record Scenario Inputs","Configure Record Controls","Record D-Pad -> Analog: $DPAD_ANALOG","Mode: $MODE","Check Setup / Preflight","Bundle Last Result","View Last Summary","Exit"]
+["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Generate Missing Savestates (Auto)","Capture State / Find Frame","Mode: $MODE","Check Setup / Preflight","Bundle Last Result","View Last Summary","Exit"]
 EOF
 	rm -f "$CHOICE_OUT"
 	minui-list --disable-auto-sleep --file "$MENU_JSON" --format json --title "N64 Benchmark ($PLATFORM)" --confirm-text "SELECT" --write-location "$CHOICE_OUT" >/dev/null
@@ -639,15 +513,6 @@ EOF
 			;;
 		"Capture State / Find Frame")
 			capture_state_interactive
-			;;
-		"Record Scenario Inputs")
-			record_scenario
-			;;
-		"Configure Record Controls")
-			configure_record_controls
-			;;
-		"Record D-Pad -> Analog: "*)
-			toggle_dpad_analog
 			;;
 		"Mode: "*)
 			cycle_mode
