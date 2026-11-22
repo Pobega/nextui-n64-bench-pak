@@ -32,6 +32,7 @@ DEVICE_PALETTE = [
     "#34d399",
 ]
 COLOR_WARN = "#f85149"
+COLOR_NON_RICE_WINNER = "#facc15"
 
 FONT_SANS_BOLD = "/usr/share/fonts/abattis-cantarell-fonts/Cantarell-Bold.otf"
 FONT_SANS_EXTRABOLD = "/usr/share/fonts/abattis-cantarell-fonts/Cantarell-ExtraBold.otf"
@@ -479,6 +480,10 @@ def chart_overview_pacing(devices: List[Dict[str, Any]], out_path: Path) -> None
     finish_canvas(img, out_path)
 
 
+def is_rice_profile(profile_id: str) -> bool:
+    return "rice" in profile_id.lower()
+
+
 def heat_color(pct: float) -> Tuple[str, str]:
     if pct < 100:
         return "#5a1e24", "#ffa198"
@@ -583,14 +588,28 @@ def draw_heatmap_block(
 
         grid_y0 = strip_y0 + HEATMAP_STRIP_HDR_H
         col_best_240: Dict[int, float] = {}
+        col_best_non_rice_240: Dict[int, float] = {}
+        col_best_is_rice: Dict[int, bool] = {}
         for c, (sids, _, _, _) in enumerate(strip_games):
-            vals = [
-                float(run["speed_pct"])
-                for p in CORE_PROFILES
-                for run in [get_game_run(runs, sids, p[1], "uncapped")]
-                if run is not None
-            ]
-            col_best_240[c] = max(vals) if vals else -1.0
+            all_vals: List[Tuple[float, bool]] = []
+            non_rice_vals: List[float] = []
+            for p in CORE_PROFILES:
+                run = get_game_run(runs, sids, p[1], "uncapped")
+                if run is None:
+                    continue
+                spd = float(run["speed_pct"])
+                rice = is_rice_profile(p[1])
+                all_vals.append((spd, rice))
+                if not rice:
+                    non_rice_vals.append(spd)
+            if all_vals:
+                best_val = max(v for v, _ in all_vals)
+                col_best_240[c] = best_val
+                col_best_is_rice[c] = all(rice for v, rice in all_vals if v == best_val)
+            else:
+                col_best_240[c] = -1.0
+                col_best_is_rice[c] = False
+            col_best_non_rice_240[c] = max(non_rice_vals) if non_rice_vals else -1.0
 
         for r_idx, (plabel, p240, p480) in enumerate(CORE_PROFILES):
             ry = grid_y0 + r_idx * HEATMAP_ROW_H
@@ -623,12 +642,19 @@ def draw_heatmap_block(
                 r480 = float(run480["speed_pct"]) if run480 is not None else None
                 bg, fg = heat_color(r240)
                 is_best = r240 == col_best_240[c]
+                is_best_non_rice = (
+                    not is_best
+                    and col_best_is_rice[c]
+                    and not is_rice_profile(p240)
+                    and r240 == col_best_non_rice_240[c]
+                )
+                outline_color = TEXT_MAIN if is_best else (COLOR_NON_RICE_WINNER if is_best_non_rice else None)
                 draw.rounded_rectangle(
                     [s(cx0), s(ry), s(cx1), s(ry + HEATMAP_ROW_H - 6)],
                     radius=s(6),
                     fill=bg,
-                    outline=TEXT_MAIN if is_best else None,
-                    width=s(1.5) if is_best else 0,
+                    outline=outline_color,
+                    width=s(1.75) if outline_color else 0,
                 )
 
                 t_main = f"{r240:.0f}%"
@@ -662,7 +688,7 @@ def chart_heatmap_all_games(devices: List[Dict[str, Any]], out_path: Path) -> No
         draw,
         width,
         "All Games Uncapped Speed Matrix — 320×240 (Primary) & 640×480 (Secondary)",
-        "Every game's raw headroom on one screen. White border highlights the fastest renderer per game on each device.",
+        "White border = fastest overall · Gold border = fastest non-Rice renderer (shown when Rice leads).",
     )
     draw_legend(draw, 32, 92, width, legend_items)
 
