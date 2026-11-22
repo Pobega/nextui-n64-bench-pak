@@ -48,10 +48,12 @@ Place the matching ReARMed savestates (`M64+SAVE` v1.6 — compatible with both 
 ## Running Benchmarks On-Device
 
 1. Launch **N64Bench** from NextUI's **Tools** menu.
-2. Run **Check Setup / Preflight** to confirm ROMs found, savestates found, SoC model, NextUI version, and battery level.
-3. Select **Run Benchmark Tier (Recommended)** -> **Community Standard (10 Profiles, 240p+480p)** for standardized cross-device submissions (compares all 5 renderer/core profiles at both `320x240` and `640x480` in `paced` and `uncapped` modes).
+2. *(Optional)* Run **Check Setup** to confirm ROMs found, device/SoC, NextUI version, and battery level.
+3. Select **Run Community Benchmark (Recommended)** for standardized cross-device submissions (compares all 5 renderer/core profiles at both `320x240` and `640x480` in `paced` and `uncapped` modes):
+   - Any missing savestates are auto-generated deterministically from cold boot (~2 min), then the full benchmark runs automatically without needing a second confirmation.
    - Keep your handheld plugged in or above 50% battery before starting.
-   - Hold **MENU** during any run to abort cleanly.
+   - Hold **MENU** anytime to abort cleanly.
+4. Use **Custom Benchmark...** for individual tiers, single profiles, single games, or mode overrides, and **Tools & Advanced...** for manual savestate generation, re-bundling results, or dev frame capture.
 
 ## Submitting Results
 

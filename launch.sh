@@ -155,6 +155,34 @@ lookup_id_by_name() {
 	return 1
 }
 
+extract_missing_roms() {
+	raw="$1"
+	out=""
+	old_ifs="$IFS"
+	IFS=","
+	for item in $raw; do
+		case "$item" in
+			*:rom)
+				sid="${item%:rom}"
+				if [ -n "$out" ]; then
+					out="$out, $sid"
+				else
+					out="$sid"
+				fi
+				;;
+		esac
+	done
+	IFS="$old_ifs"
+	printf '%s\n' "$out"
+}
+
+estimate_run_minutes() {
+	runs="$1"
+	mins=$(( (runs * 16 + 59) / 60 ))
+	[ "$mins" -lt 1 ] && mins=1
+	printf '%s\n' "$mins"
+}
+
 run_preflight_check() {
 	pf_out="$("$BENCHCTL" preflight "$SCENARIOS_JSON" "$PAK_DIR" 2>/dev/null)"
 	r_found="$(preflight_field "$pf_out" "ROMS_FOUND")"
@@ -165,15 +193,32 @@ run_preflight_check() {
 	soc_mod="$(preflight_field "$pf_out" "SOC_MODEL")"
 	next_ver="$(preflight_field "$pf_out" "NEXTUI_VERSION")"
 	missing="$(preflight_field "$pf_out" "MISSING")"
+	missing_roms="$(extract_missing_roms "$missing")"
 
 	[ -z "$bat_pct" ] && bat_pct="$(read_battery_pct)"
 	bat_line="$(format_battery_line "$bat_pct")"
 
-	PF_MSG="Device: $DEV_TAG ($PLATFORM)\nSoC: ${soc_mod:-unknown}\nNextUI: ${next_ver:-unknown} | Pak v${PAK_VERSION}\nROMs: ${r_found:-0}/${r_total:-0} | States: ${s_found:-0}/${s_total:-0}\n$bat_line"
-	if [ -n "$missing" ]; then
-		PF_MSG="$PF_MSG\nMissing: $missing"
+	r_found="${r_found:-0}"
+	r_total="${r_total:-0}"
+	s_found="${s_found:-0}"
+	s_total="${s_total:-0}"
+
+	if [ "$s_found" -lt "$r_found" ] 2>/dev/null; then
+		state_note=" (missing states auto-generate)"
+	else
+		state_note=""
 	fi
-	show_msg "Preflight Check\n\n$PF_MSG"
+
+	rom_note=""
+	if [ "$r_found" -gt 0 ] && [ "$r_found" -lt "$r_total" ] 2>/dev/null; then
+		rom_note=" ($((r_total - r_found)) skipped - still runnable)"
+	fi
+
+	PF_MSG="Device: $DEV_TAG ($PLATFORM)\nSoC: ${soc_mod:-unknown}\nNextUI: ${next_ver:-unknown} | Pak v${PAK_VERSION}\nROMs: ${r_found}/${r_total}${rom_note}\nStates: ${s_found}/${s_total}${state_note}\n$bat_line"
+	if [ -n "$missing_roms" ]; then
+		PF_MSG="$PF_MSG\nMissing ROMs: $missing_roms"
+	fi
+	show_msg "Setup Check\n\n$PF_MSG"
 }
 
 bundle_last_result() {
@@ -245,31 +290,7 @@ execute_plan() {
 	scope="$1"
 	target_id="$2"
 	title="$3"
-
-	rm -f "$PLAN_TSV"
-	PLAN_INFO="$("$BENCHCTL" plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$scope" "$target_id" "$MODE" "$WORK_DIR" "$PLAN_TSV")"
-	TOTAL_RUNS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
-	SKIPPED_SCENS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*SKIPPED_SCENARIOS=\([0-9]*\).*/\1/p')"
-
-	if [ -z "$TOTAL_RUNS" ] || [ "$TOTAL_RUNS" -eq 0 ] || [ "${SKIPPED_SCENS:-0}" -gt 0 ]; then
-		rm -f "$GEN_TSV"
-		GEN_INFO="$("$BENCHCTL" genstate-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "missing" "$WORK_DIR" "$GEN_TSV" 2>/dev/null)"
-		GEN_PLANNED="$(printf '%s\n' "$GEN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
-		if [ -n "$GEN_PLANNED" ] && [ "$GEN_PLANNED" -gt 0 ]; then
-			if confirm_msg "$GEN_PLANNED missing savestate(s) can be auto-generated now.\n\nGenerate missing savestates before benchmarking?"; then
-				run_genstate_plan_tsv "$GEN_TSV"
-				rm -f "$PLAN_TSV"
-				PLAN_INFO="$("$BENCHCTL" plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$scope" "$target_id" "$MODE" "$WORK_DIR" "$PLAN_TSV")"
-				TOTAL_RUNS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
-				SKIPPED_SCENS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*SKIPPED_SCENARIOS=\([0-9]*\).*/\1/p')"
-			fi
-		fi
-	fi
-
-	if [ -z "$TOTAL_RUNS" ] || [ "$TOTAL_RUNS" -eq 0 ]; then
-		show_msg "No runnable benchmarks found!\n\nPlace ROMs in N64Bench.pak/roms/ (or /mnt/SDCARD/Roms/N64/) and generate or copy savestates into N64Bench.pak/states/.\n\nSkipped missing scenarios: ${SKIPPED_SCENS:-0}"
-		return 1
-	fi
+	active_mode="${4:-$MODE}"
 
 	PF_OUT="$("$BENCHCTL" preflight "$SCENARIOS_JSON" "$PAK_DIR" 2>/dev/null)"
 	PF_RF="$(preflight_field "$PF_OUT" "ROMS_FOUND")"
@@ -280,9 +301,65 @@ execute_plan() {
 	[ -z "$PF_BAT" ] && PF_BAT="$(read_battery_pct)"
 	BAT_LINE="$(format_battery_line "$PF_BAT")"
 
-	MSG="Ready: $title\nDevice: $DEV_TAG ($PLATFORM)\nROMs: ${PF_RF:-?}/${PF_RT:-?} | States: ${PF_SF:-?}/${PF_ST:-?}\n$BAT_LINE\nRuns: $TOTAL_RUNS (mode: $MODE, skipped: ${SKIPPED_SCENS:-0})\n\nHold MENU during any run to abort early."
+	if [ "${PF_RF:-0}" -eq 0 ] 2>/dev/null; then
+		show_msg "No N64 ROMs found!\n\nPlace No-Intro USA N64 ROMs in /mnt/SDCARD/Roms/N64/ (or N64Bench.pak/roms/) and try again."
+		return 1
+	fi
+
+	rm -f "$PLAN_TSV" "$GEN_TSV"
+	PLAN_INFO="$("$BENCHCTL" plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$scope" "$target_id" "$active_mode" "$WORK_DIR" "$PLAN_TSV")"
+	TOTAL_RUNS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
+	SKIPPED_SCENS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*SKIPPED_SCENARIOS=\([0-9]*\).*/\1/p')"
+
+	GEN_PLANNED=0
+	if [ -z "$TOTAL_RUNS" ] || [ "$TOTAL_RUNS" -eq 0 ] || [ "${SKIPPED_SCENS:-0}" -gt 0 ]; then
+		gen_target="missing"
+		if [ "$scope" = "scenario" ] && [ "${TOTAL_RUNS:-0}" -eq 0 ]; then
+			gen_target="$target_id"
+		fi
+		GEN_INFO="$("$BENCHCTL" genstate-plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$gen_target" "$WORK_DIR" "$GEN_TSV" 2>/dev/null)"
+		GEN_PLANNED="$(printf '%s\n' "$GEN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
+		[ -n "$GEN_PLANNED" ] || GEN_PLANNED=0
+	fi
+
+	if [ "${TOTAL_RUNS:-0}" -eq 0 ] && [ "$GEN_PLANNED" -eq 0 ]; then
+		show_msg "No runnable benchmarks found!\n\nPlace No-Intro USA N64 ROMs in /mnt/SDCARD/Roms/N64/ or N64Bench.pak/roms/.\n\nSkipped scenarios: ${SKIPPED_SCENS:-0}"
+		return 1
+	fi
+
+	ROM_LINE="ROMs: ${PF_RF:-?}/${PF_RT:-?}"
+	if [ -n "$PF_RF" ] && [ -n "$PF_RT" ] && [ "$PF_RF" -lt "$PF_RT" ] 2>/dev/null; then
+		ROM_LINE="$ROM_LINE ($((PF_RT - PF_RF)) skipped - still runnable)"
+	fi
+
+	if [ "$GEN_PLANNED" -gt 0 ]; then
+		STATE_LINE="States: ${PF_SF:-0}/${PF_ST:-?} (+$GEN_PLANNED will auto-generate)"
+		STEP_LINE="Auto-generates $GEN_PLANNED state(s) (~2 min), then runs benchmark automatically."
+	else
+		EST_MIN="$(estimate_run_minutes "$TOTAL_RUNS")"
+		STATE_LINE="States: ${PF_SF:-?}/${PF_ST:-?}"
+		STEP_LINE="Runs: $TOTAL_RUNS (~${EST_MIN} min, mode: $active_mode)"
+	fi
+
+	MSG="Ready: $title\nDevice: $DEV_TAG ($PLATFORM)\n$ROM_LINE\n$STATE_LINE\n$BAT_LINE\n$STEP_LINE\n\nHold MENU anytime to abort early."
 	if ! confirm_msg "$MSG"; then
 		return 0
+	fi
+
+	if [ "$GEN_PLANNED" -gt 0 ]; then
+		run_genstate_plan_tsv "$GEN_TSV"
+		if [ "$GEN_ABORTED" -eq 1 ]; then
+			show_msg "Benchmark Aborted\n\nStopped during savestate generation (saved $GEN_SAVED/$GEN_PLANNED)."
+			return 0
+		fi
+		rm -f "$PLAN_TSV"
+		PLAN_INFO="$("$BENCHCTL" plan "$PROFILES_JSON" "$SCENARIOS_JSON" "$PAK_DIR" "$PLATFORM" "$scope" "$target_id" "$active_mode" "$WORK_DIR" "$PLAN_TSV")"
+		TOTAL_RUNS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*PLANNED=\([0-9]*\).*/\1/p')"
+		SKIPPED_SCENS="$(printf '%s\n' "$PLAN_INFO" | sed -n 's/.*SKIPPED_SCENARIOS=\([0-9]*\).*/\1/p')"
+		if [ -z "$TOTAL_RUNS" ] || [ "$TOTAL_RUNS" -eq 0 ]; then
+			show_msg "Savestate generation did not produce runnable states (saved $GEN_SAVED, failed $GEN_FAILED)."
+			return 1
+		fi
 	fi
 
 	TS="$(date +%Y%m%d-%H%M%S)"
@@ -331,7 +408,7 @@ execute_plan() {
 	BENCH_PAK_VERSION="$PAK_VERSION" \
 	BENCH_SCOPE="$scope" \
 	BENCH_TARGET="$target_id" \
-	BENCH_MODE_SELECTED="$MODE" \
+	BENCH_MODE_SELECTED="$active_mode" \
 	BENCH_BAT_START="$BAT_START" \
 	BENCH_BAT_END="$BAT_END" \
 	"$BENCHCTL" aggregate "$PLAN_TSV" "$RUN_DIR" "$PLATFORM" "$DEV_TAG" \
@@ -340,9 +417,10 @@ execute_plan() {
 
 	BUNDLE_INFO=""
 	if bundle_run_dir "$RUN_DIR"; then
-		BUNDLE_INFO="Bundle: results/$(basename "$LAST_BUNDLE_PATH")"
 		if [ -n "$LAST_MIRROR_PATH" ]; then
-			BUNDLE_INFO="$BUNDLE_INFO\nSubmit file: $LAST_MIRROR_PATH"
+			BUNDLE_INFO="Send this file:\n$LAST_MIRROR_PATH"
+		else
+			BUNDLE_INFO="Send this file:\n$LAST_BUNDLE_PATH"
 		fi
 	fi
 
@@ -354,7 +432,7 @@ execute_plan() {
 		DONE_NOTE="$DONE_NOTE\n($STATE_ERRORS savestate load failure(s))"
 	fi
 
-	SUMMARY_PREVIEW="$(head -n 10 "$RUN_DIR/summary.txt" 2>/dev/null)"
+	SUMMARY_PREVIEW="$(head -n 8 "$RUN_DIR/summary.txt" 2>/dev/null)"
 	show_msg "$DONE_NOTE\n$BUNDLE_INFO\n\n$SUMMARY_PREVIEW"
 }
 
@@ -483,9 +561,75 @@ cycle_mode() {
 	esac
 }
 
+custom_benchmark_menu() {
+	while true; do
+		cat > "$SUB_JSON" <<EOF
+["Select Benchmark Tier...","Run Full Suite (All Profiles)","Run Single Profile...","Run Single Scenario...","Mode: $MODE","Back"]
+EOF
+		rm -f "$SUB_OUT"
+		minui-list --disable-auto-sleep --file "$SUB_JSON" --format json --title "Custom Benchmark" --confirm-text "SELECT" --write-location "$SUB_OUT" >/dev/null
+		RC=$?
+		if [ "$RC" -ne 0 ] || [ ! -f "$SUB_OUT" ]; then
+			return
+		fi
+
+		SUB_CHOICE="$(cat "$SUB_OUT")"
+		case "$SUB_CHOICE" in
+			"Select Benchmark Tier...")
+				pick_tier
+				;;
+			"Run Full Suite (All Profiles)")
+				execute_plan "all" "all" "Full Suite (All Profiles)"
+				;;
+			"Run Single Profile...")
+				pick_profile
+				;;
+			"Run Single Scenario...")
+				pick_scenario
+				;;
+			"Mode: "*)
+				cycle_mode
+				;;
+			"Back"|"")
+				return
+				;;
+		esac
+	done
+}
+
+tools_advanced_menu() {
+	while true; do
+		cat > "$SUB_JSON" <<EOF
+["Generate Missing Savestates","Bundle Last Result","Capture State / Find Frame (Dev)","Back"]
+EOF
+		rm -f "$SUB_OUT"
+		minui-list --disable-auto-sleep --file "$SUB_JSON" --format json --title "Tools & Advanced" --confirm-text "SELECT" --write-location "$SUB_OUT" >/dev/null
+		RC=$?
+		if [ "$RC" -ne 0 ] || [ ! -f "$SUB_OUT" ]; then
+			return
+		fi
+
+		SUB_CHOICE="$(cat "$SUB_OUT")"
+		case "$SUB_CHOICE" in
+			"Generate Missing Savestates")
+				generate_missing_states
+				;;
+			"Bundle Last Result")
+				bundle_last_result
+				;;
+			"Capture State / Find Frame (Dev)")
+				capture_state_interactive
+				;;
+			"Back"|"")
+				return
+				;;
+		esac
+	done
+}
+
 while true; do
 	cat > "$MENU_JSON" <<EOF
-["Run Benchmark Tier (Recommended)","Run Full Suite (All Profiles)","Run Single Profile","Run Single Scenario","Generate Missing Savestates (Auto)","Capture State / Find Frame","Mode: $MODE","Check Setup / Preflight","Bundle Last Result","View Last Summary","Exit"]
+["Run Community Benchmark (Recommended)","Custom Benchmark...","Check Setup","View Last Summary","Tools & Advanced...","Exit"]
 EOF
 	rm -f "$CHOICE_OUT"
 	minui-list --disable-auto-sleep --file "$MENU_JSON" --format json --title "N64 Benchmark ($PLATFORM)" --confirm-text "SELECT" --write-location "$CHOICE_OUT" >/dev/null
@@ -496,32 +640,14 @@ EOF
 
 	CHOICE="$(cat "$CHOICE_OUT")"
 	case "$CHOICE" in
-		"Run Benchmark Tier (Recommended)")
-			pick_tier
+		"Run Community Benchmark (Recommended)")
+			execute_plan "tier" "community-standard" "Community Standard (240p+480p)" "both"
 			;;
-		"Run Full Suite (All Profiles)")
-			execute_plan "all" "all" "Full Suite (All Profiles)"
+		"Custom Benchmark...")
+			custom_benchmark_menu
 			;;
-		"Run Single Profile")
-			pick_profile
-			;;
-		"Run Single Scenario")
-			pick_scenario
-			;;
-		"Generate Missing Savestates (Auto)")
-			generate_missing_states
-			;;
-		"Capture State / Find Frame")
-			capture_state_interactive
-			;;
-		"Mode: "*)
-			cycle_mode
-			;;
-		"Check Setup / Preflight")
+		"Check Setup")
 			run_preflight_check
-			;;
-		"Bundle Last Result")
-			bundle_last_result
 			;;
 		"View Last Summary")
 			if [ -f "$LAST_SUMMARY_TXT" ]; then
@@ -529,6 +655,9 @@ EOF
 			else
 				show_msg "No benchmark results yet."
 			fi
+			;;
+		"Tools & Advanced...")
+			tools_advanced_menu
 			;;
 		"Exit"|"")
 			break
